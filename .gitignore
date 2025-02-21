@@ -9,3 +9,9 @@
 /tmp/
 /data/
 .ipynb_checkpoints
+**/.history/
+*.pdf
+/.history/
+**/bigdata/
+**/__pycache__/
+
