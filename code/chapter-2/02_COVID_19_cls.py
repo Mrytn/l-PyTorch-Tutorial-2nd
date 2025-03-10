@@ -71,7 +71,7 @@ def main():
     # you can download the datasets from
     # https://pan.baidu.com/s/18BsxploWR3pbybFtNsw5fA  code：pyto
     # path to datasets——covid-19-demo
-    root_dir = r"E:\Project\pytorch\l-PyTorch-Tutorial-2nd\code\chapter-2"
+    root_dir = r"code/chapter-2/datasets/covid-19-demo"
     img_dir = os.path.join(root_dir, "imgs")
     path_txt_train = os.path.join(root_dir, "labels", "train.txt")
     path_txt_valid = os.path.join(root_dir, "labels", "valid.txt")
@@ -79,8 +79,10 @@ def main():
         transforms.Resize((8, 8)),
         transforms.ToTensor(),
     ])
-    train_data = COVID19Dataset(root_dir=img_dir, txt_path=path_txt_train, transform=transforms_func)
-    valid_data = COVID19Dataset(root_dir=img_dir, txt_path=path_txt_valid, transform=transforms_func)
+    train_data = COVID19Dataset(
+        root_dir=img_dir, txt_path=path_txt_train, transform=transforms_func)
+    valid_data = COVID19Dataset(
+        root_dir=img_dir, txt_path=path_txt_valid, transform=transforms_func)
     train_loader = DataLoader(dataset=train_data, batch_size=2)
     valid_loader = DataLoader(dataset=valid_data, batch_size=2)
 
@@ -101,7 +103,8 @@ def main():
 
     # step 3/4 : 优化模块
     loss_f = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
+    optimizer = optim.SGD(model.parameters(), lr=0.1,
+                          momentum=0.9, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.StepLR(optimizer, gamma=0.1, step_size=50)
     # step 4/4 : 迭代模块
     for epoch in range(100):
@@ -137,7 +140,8 @@ def main():
             _, predicted = torch.max(outputs.data, 1)
             correct_num = (predicted == labels).sum()
             acc_valid = correct_num / labels.shape[0]
-            print("Epoch:{} Valid Loss:{:.2f} Acc:{:.0%}".format(epoch, loss, acc_valid))
+            print("Epoch:{} Valid Loss:{:.2f} Acc:{:.0%}".format(
+                epoch, loss, acc_valid))
 
         # 添加停止条件
         if acc_valid == 1:
@@ -149,4 +153,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
