@@ -14,4 +14,4 @@ print("\nCUDA is available:{}, version is {}".format(torch.cuda.is_available(), 
 print(torch.__version__)
 
 # print("\ndevice_name: {}".format(torch.cuda.get_device_name(0)))
-!time / t
+# !time / t

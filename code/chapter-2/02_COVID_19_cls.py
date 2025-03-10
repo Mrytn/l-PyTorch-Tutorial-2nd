@@ -70,7 +70,8 @@ def main():
                              for i in txt_data]
     # you can download the datasets from
     # https://pan.baidu.com/s/18BsxploWR3pbybFtNsw5fA  code：pyto
-    root_dir = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-demo"  # path to datasets——covid-19-demo
+    # path to datasets——covid-19-demo
+    root_dir = r"E:\Project\pytorch\l-PyTorch-Tutorial-2nd\code\chapter-2"
     img_dir = os.path.join(root_dir, "imgs")
     path_txt_train = os.path.join(root_dir, "labels", "train.txt")
     path_txt_valid = os.path.join(root_dir, "labels", "valid.txt")
