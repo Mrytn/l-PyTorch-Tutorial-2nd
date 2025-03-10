@@ -7,7 +7,6 @@
 .DS_Store
 .log/
 /tmp/
-/data/
 .ipynb_checkpoints
 **/.history/
 *.pdf
