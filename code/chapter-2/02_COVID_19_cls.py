@@ -62,16 +62,20 @@ def main():
             :return:
             """
             # 读取txt，解析txt
+            # "r"只读
             with open(self.txt_path, "r") as f:
                 txt_data = f.read().strip()
                 txt_data = txt_data.split("\n")
-
+            # i.split()：对每一行 i 按空格分割成列表。例如，如果 i = "image1.jpg 123 0"，那么 i.split() 结果是 ["image1.jpg", "123", "0"]。
+            # i.split()[0]：取出文件名（image1.jpg）。
+            # i.split()[2]：取出标签值（如 0），并转换为 int 类型。
+            # os.path.join(self.root_dir, i.split()[0])：将 self.root_dir（图片的根目录）和 i.split()[0]（文件名）拼接，形成完整的图片路径。
             self.img_info = [(os.path.join(self.root_dir, i.split()[0]), int(i.split()[2]))
                              for i in txt_data]
     # you can download the datasets from
     # https://pan.baidu.com/s/18BsxploWR3pbybFtNsw5fA  code：pyto
     # path to datasets——covid-19-demo
-    root_dir = r"code/chapter-2/datasets/covid-19-demo"
+    root_dir = r"data/datasets/covid-19-demo"
     img_dir = os.path.join(root_dir, "imgs")
     path_txt_train = os.path.join(root_dir, "labels", "train.txt")
     path_txt_valid = os.path.join(root_dir, "labels", "valid.txt")
