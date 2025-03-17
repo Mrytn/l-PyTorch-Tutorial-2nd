@@ -10,13 +10,27 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader, ConcatDataset, Subset, random_split
 from PIL import Image
 from torchvision.transforms import transforms
+# os：用于操作文件和文件夹。
+# pandas：用于处理 CSV 文件的数据。
+# torch.utils.data：
+# Dataset：用于定义自定义数据集类。
+# DataLoader：用于加载数据集。
+# ConcatDataset：用于合并多个数据集。
+# Subset：用于从数据集中提取子集。
+# random_split：用于随机拆分数据集。
+# PIL.Image：用于读取和处理图片。
+# torchvision.transforms：用于对图像进行变换（如归一化、翻转等）
 
-
+# 该类用于加载数据集 1，其图片路径和标签信息存储在 txt 文件中。
 class COVID19Dataset(Dataset):
     def __init__(self, root_dir, txt_path, transform=None):
         """
         获取数据集的路径、预处理的方法
         """
+        # root_dir：数据集的根目录。
+        # txt_path：存储图像文件名及其标签的 txt 文件路径。
+        # transform：对图像进行变换（例如归一化）。
+        # self.img_info：用于存储 (图片路径, 标签) 的列表。
         self.root_dir = root_dir
         self.txt_path = txt_path
         self.transform = transform
@@ -30,9 +44,11 @@ class COVID19Dataset(Dataset):
         :param index:
         :return:
         """
+        # 其中 i.split()[0] 获取图片文件名，i.split()[2] 获取标签。
         path_img, label = self.img_info[index]
+        # 读取 index 处的图片并转换为灰度模式（'L'）
         img = Image.open(path_img).convert('L')
-
+        # 进行预处理（如果 transform 不为空
         if self.transform is not None:
             img = self.transform(img)
 
@@ -58,7 +74,7 @@ class COVID19Dataset(Dataset):
         self.img_info = [(os.path.join(self.root_dir, i.split()[0]), int(i.split()[2]))
                          for i in txt_data]
 
-
+# 该类用于加载数据集 3，图像路径和标签存储在 CSV 文件 中，并且训练集和验证集在同一文件中
 class COVID19Dataset_3(Dataset):
     """
     对应数据集形式-3： 数据的划分及标签在csv中
@@ -88,6 +104,11 @@ class COVID19Dataset_3(Dataset):
         :return:
         """
         path_img, label = self.img_info[index]
+        # Image.open(path_img): 打开图像文件
+# Image 是 PIL（Pillow）的一个模块，提供了图像处理的基本功能。
+# open(path_img) 用于打开指定路径 path_img 处的图片文件，并返回一个 Image 对象。
+# convert('L') 方法用于将图片转换为 灰度模式（Grayscale）。
+# 'L' 模式表示每个像素点的颜色范围从 0（黑色）到 255（白色），中间值表示不同的灰度级别
         img = Image.open(path_img).convert('L')
 
         if self.transform is not None:
@@ -108,6 +129,13 @@ class COVID19Dataset_3(Dataset):
         :return:
         """
         df = pd.read_csv(self.path_csv)
+        # 这行代码的作用是从 DataFrame 中删除不符合指定 mode 的行
+        # df["set-type"] != self.mode
+        # 这部分代码的作用是筛选出所有 set-type 不等于 self.mode 的行，返回一个布尔
+        # df[df["set-type"] != self.mode].index
+        # 这一步提取上一步中 True 的行索引
+        # df.drop([1, 3], inplace=True) 这一步从 df 中删除索引 1 和 3 对应的行。
+        # inplace=True 使修改直接作用于 df，不会返回新的 DataFrame，而是直接修改原来的 df。
         df.drop(df[df["set-type"] != self.mode].index, inplace=True)  # 只要对应的数据
         df.reset_index(inplace=True)    # 非常重要！ pandas的drop不会改变index
         # 遍历表格，获取每张样本信息
