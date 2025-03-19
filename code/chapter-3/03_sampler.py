@@ -60,7 +60,7 @@ class COVID19Dataset(Dataset):
 
 
 if __name__ == "__main__":
-    root_dir = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-demo"  # path to datasets——covid-19-demo
+    root_dir = r"data\datasets\covid-19-demo"  # path to datasets——covid-19-demo
     img_dir = os.path.join(root_dir, "imgs")
     path_txt_train = os.path.join(root_dir, "labels", "train.txt")
 

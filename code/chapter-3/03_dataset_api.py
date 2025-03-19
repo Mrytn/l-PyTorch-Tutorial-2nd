@@ -70,7 +70,7 @@ class COVID19Dataset(Dataset):
         with open(self.txt_path, "r") as f:
             txt_data = f.read().strip()
             txt_data = txt_data.split("\n")
-
+        # i.split()表示用空格分割字符串，返回一个列表。
         self.img_info = [(os.path.join(self.root_dir, i.split()[0]), int(i.split()[2]))
                          for i in txt_data]
 
@@ -136,7 +136,10 @@ class COVID19Dataset_3(Dataset):
         # 这一步提取上一步中 True 的行索引
         # df.drop([1, 3], inplace=True) 这一步从 df 中删除索引 1 和 3 对应的行。
         # inplace=True 使修改直接作用于 df，不会返回新的 DataFrame，而是直接修改原来的 df。
-        df.drop(df[df["set-type"] != self.mode].index, inplace=True)  # 只要对应的数据
+        # df[df["set-type"] != self.mode]：使用布尔索引筛选出列 "set-type" 的值不等于 self.mode 的所有行。
+# df[df["set-type"] != self.mode].index：获取筛选出的行的索引
+        df.drop(df[df["set-type"] != self.mode].index,
+                inplace=True)  # 只要对应的数据使索引从 0 开始连续编号
         df.reset_index(inplace=True)    # 非常重要！ pandas的drop不会改变index
         # 遍历表格，获取每张样本信息
         for idx in range(len(df)):
@@ -144,7 +147,7 @@ class COVID19Dataset_3(Dataset):
             label_int = int(df.loc[idx, "label"])
             self.img_info.append((path_img, label_int))
 
-
+# 该类用于加载数据集 2，图片存放在不同的文件夹，每个文件夹的名字就是类别
 class COVID19Dataset_2(Dataset):
     """
     对应数据集形式-2： 数据的划分及标签在文件夹中体现
@@ -189,36 +192,51 @@ class COVID19Dataset_2(Dataset):
         path, label
         :return:
         """
-        for root, dirs, files in os.walk(self.root_dir):
-            for file in files:
-                if file.endswith("png") or file.endswith("jpeg"):
-                    path_img = os.path.join(root, file)
-                    sub_dir = os.path.basename(root)
-                    label_int = self.str_2_int[sub_dir]
+        for root, dirs, files in os.walk(self.root_dir):  # 遍历根目录下的所有文件夹和文件
+            for file in files:  # 遍历当前文件夹中的所有文件
+                if file.endswith("png") or file.endswith("jpeg"):  # 只处理 PNG 和 JPEG 格式的图片
+                    path_img = os.path.join(root, file)  # 获取图片的完整路径
+                    sub_dir = os.path.basename(root)  # 获取当前图片所在的文件夹名称（类别名）
+                    label_int = self.str_2_int[sub_dir]  # 将类别名转换为对应的整数标签
+                    # 存储 (图片路径, 标签) 到 img_info 列表
                     self.img_info.append((path_img, label_int))
 
 
 if __name__ == "__main__":
     # =============================== Concat ================================
     # set1
-    root_dir = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-demo"  # path to datasets——covid-19-demo
+    # root_dir 是数据集 covid-19-demo 的根目录。
+    # img_dir = os.path.join(root_dir, "imgs") 获取 imgs 目录的路径，其中存放图片。
+    # path_txt_train 指向 labels/train.txt，通常包含图片路径和对应的标签。
+    # train_data_1 = COVID19Dataset(root_dir=img_dir, txt_path=path_txt_train) 通过 COVID19Dataset 读取数据集。
+    root_dir = r"data\datasets\covid-19-demo"  # path to datasets——covid-19-demo
     img_dir = os.path.join(root_dir, "imgs")
     path_txt_train = os.path.join(root_dir, "labels", "train.txt")
     train_data_1 = COVID19Dataset(root_dir=img_dir, txt_path=path_txt_train)
     # set2
-    root_dir_train = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-dataset-2\train"  # path to your data
+    # root_dir_train 直接指向 train 目录，该目录可能包含类别文件夹，每个类别存放相应的图片。
+    # train_data_2 = COVID19Dataset_2(root_dir_train) 使用 COVID19Dataset_2 读取该数据集。
+    root_dir_train = r"data\datasets\covid-19-dataset-2\train"  # path to your data
     train_data_2 = COVID19Dataset_2(root_dir_train)
     # set3
-    root_dir = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-dataset-3\imgs"  # path to your data
-    path_csv = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-dataset-3\dataset-meta-data.csv"
+    # root_dir 指向 covid-19-dataset-3/imgs，图片存放目录。
+    # path_csv 指向 dataset-meta-data.csv，通常是一个 CSV 文件，记录了图片的路径、类别等信息。
+    # train_data_3 = COVID19Dataset_3(root_dir, path_csv, "train") 读取该数据集，并指定使用 train 部分数据。
+    root_dir = r"data\datasets\covid-19-dataset-3\imgs"  # path to your data
+    path_csv = r"data\datasets\covid-19-dataset-3\dataset-meta-data.csv"
     train_data_3 = COVID19Dataset_3(root_dir, path_csv, "train")
     # concat
+    # ConcatDataset：合并多个数据集，使它们成为一个大的数据集。
     train_set_all = ConcatDataset([train_data_1, train_data_2, train_data_3])
     print(len(train_set_all))  # 2 + 2 + 2 =6
 
     # =============================== sub set ================================
+    # 从 train_set_all 中选择索引 [0, 1, 2, 5] 作为子数据集。
     train_sub_set = Subset(train_set_all, [0, 1, 2, 5])  # 将这4个样本抽出来构成子数据集
     print(len(train_sub_set))
     # =============================== random split ================================
+    # random_split：将数据集随机拆分为两个部分：
+# set_split_1 包含 4 个样本。
+# set_split_2 包含 2 个样本
     set_split_1, set_split_2 = random_split(train_set_all, [4, 2])
     print(len(set_split_1), len(set_split_2))

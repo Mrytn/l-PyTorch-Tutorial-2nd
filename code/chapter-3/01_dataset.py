@@ -111,13 +111,13 @@ if __name__ == "__main__":
     # you can download dataset from
     # 链接：https://pan.baidu.com/s/1szfefHgGMeyh6IyfDggLzQ
     # 提取码：ruzz
-    root_dir_train = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-dataset-2\train"  # path to your data
-    root_dir_valid = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-dataset-2\valid"  # path to your data
+    root_dir_train = r"data\datasets\covid-19-dataset-2\train"  # path to your data
+    root_dir_valid = r"data\datasets\covid-19-dataset-2\valid"  # path to your data
     train_set = COVID19Dataset_2(root_dir_train)
     valid_set = COVID19Dataset_2(root_dir_valid)
     # =========================== COVID19Dataset_3 ===================================
-    root_dir = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-dataset-3\imgs"  # path to your data
-    path_csv = r"E:\pytorch-tutorial-2nd\data\datasets\covid-19-dataset-3\dataset-meta-data.csv"  # path to your data
+    root_dir = r"data\datasets\covid-19-dataset-3\imgs"  # path to your data
+    path_csv = r"data\datasets\covid-19-dataset-3\dataset-meta-data.csv"  # path to your data
     train_set = COVID19Dataset_3(root_dir, path_csv, "train")
     print(len(train_set), next(iter(train_set)))
     # 思考，为什么返回的是 PIL.Image.Image ？
