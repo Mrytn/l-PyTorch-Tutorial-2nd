@@ -170,7 +170,7 @@ def gen_cam(feature_map, grads):
 if __name__ == '__main__':
     # 当前脚本所在的目录路径
     # BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    BASE_DIR = r"data/datasets/"
+    BASE_DIR = r"data\datasets"
     # you can download the datasets from
     # https://pan.baidu.com/s/1eDwZchwp6P1Ab9d8Qn6rbA   code：l8qe
     path_img = os.path.join(BASE_DIR, "grad_cam_data",
