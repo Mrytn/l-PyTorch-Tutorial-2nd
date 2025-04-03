@@ -10,5 +10,7 @@
 *.pdf
 /.history/
 **/bigdata/
+**/runs/
+**/Result/
 **/__pycache__/
 
