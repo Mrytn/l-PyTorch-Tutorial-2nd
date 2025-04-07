@@ -13,4 +13,5 @@
 **/runs/
 **/Result/
 **/__pycache__/
+data/datasets/hymenoptera_data
 
