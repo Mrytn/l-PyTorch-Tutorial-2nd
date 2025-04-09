@@ -20,6 +20,8 @@ class FooNet(nn.Module):
             x = linear(x)
             x = torch.relu(x)
         return x
+
+
 # =================================== 加载至cpu
 # # 控制开关：0 表示不用 GPU，1 表示使用 GPU
 flag = 0
@@ -39,7 +41,7 @@ if flag:
     net.to(device)
     # save
     net_state_dict = net.state_dict()
-    path_state_dict = "./model_in_gpu_0.pkl"
+    path_state_dict = "code/chapter-7/model_in_gpu_01.pkl"
     torch.save(net_state_dict, path_state_dict)
     # load
     # state_dict_load = torch.load(path_state_dict)
@@ -47,12 +49,13 @@ if flag:
     state_dict_load = torch.load(path_state_dict, map_location="cpu")
     print("state_dict_load:\n{}".format(state_dict_load))
 # =================================== 多gpu 保存
-flag = 0
-# flag = 1
+# flag = 0
+flag = 1
 if flag:
     # 用于获取当前系统中可用的 GPU 数量
     if torch.cuda.device_count() < 2:
         print("gpu数量不足，请到多gpu环境下运行")
+        print(torch.cuda.device_count())
         import sys
         # 如果可用 GPU 数量小于 2，会打印提示信息并使用 sys.exit(0) 终止程序运行
         sys.exit(0)
@@ -66,14 +69,15 @@ if flag:
     net.to(device)
     # save
     net_state_dict = net.state_dict()
-    path_state_dict = "./model_in_multi_gpu.pkl"
+    path_state_dict = "code/chapter-7/model_in_multi_gpu02.pkl"
     torch.save(net_state_dict, path_state_dict)
 # =================================== 多gpu 加载
-# flag = 0
-flag = 1
+flag = 0
+# flag = 1
 if flag:
     net = FooNet(neural_num=3, layers=3)
-    path_state_dict = "./model_in_multi_gpu.pkl"
+    path_state_dict = "code/chapter-7/model_in_multi_gpu.pkl"
+    # 加载模型参数（state_dict），并使用 map_location="cpu" 将其映射到 CPU 上，避免没有 GPU 的情况下出错
     state_dict_load = torch.load(path_state_dict, map_location="cpu")
     print("state_dict_load:\n{}".format(state_dict_load))
     # net.load_state_dict(state_dict_load)
