@@ -299,12 +299,14 @@ class ModelTrainerEnsemble(ModelTrainer):
         class_num = len(classes)
         conf_mat = np.zeros((class_num, class_num))
         loss_m = AverageMeter()
-        top1_m = torchmetrics.Accuracy().to(device)  # 记录ensemble的acc
+        top1_m = torchmetrics.Accuracy(
+            task='multiclass', num_classes=class_num).to(device)  # 记录ensemble的acc
         # top1 acc group
         top1_group = []
         for model_idx in range(len(models)):
             # # 每个模型的acc
-            top1_group.append(torchmetrics.Accuracy().to(device))
+            top1_group.append(torchmetrics.Accuracy(
+                task='multiclass', num_classes=class_num).to(device))
         for i, data in enumerate(data_loader):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)

@@ -180,7 +180,8 @@ class MyEnsemble(VotingClassifier):
             schedulers.append(scheduler_)
         acc_metrics = []
         for i in range(self.n_estimators):
-            acc_metrics.append(torchmetrics.Accuracy())
+            acc_metrics.append(torchmetrics.Accuracy(
+                task='multiclass', num_classes=10))
         self._criterion = nn.CrossEntropyLoss()
         # epoch循环迭代
         best_acc = 0.
