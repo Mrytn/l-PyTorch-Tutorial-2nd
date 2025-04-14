@@ -84,6 +84,7 @@ if __name__ == "__main__":
     sampler_w = WeightedRandomSampler(
         weights=samples_weights,
         num_samples=len(samples_weights),
+        # replacement 参数被设置为 True，所以采样过程是有放回的。这就导致在多次采样时，同一个样本有机会被多次选中
         replacement=True)
 
     # 设置 dataloader

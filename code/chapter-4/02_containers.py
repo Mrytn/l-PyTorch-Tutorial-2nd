@@ -17,6 +17,8 @@ if __name__ == "__main__":
     # model = alexnet(pretrained=True)
 
     # 新的推荐方式
+    #     model = alexnet(pretrained=True)（旧版本）或 model = alexnet(weights=AlexNet_Weights.IMAGENET1K_V1)（新版本）：加载预训练权重，适合迁移学习场景。
+    # model = alexnet(weights=None)：不加载预训练权重，模型参数随机初始化，适合从头开始训练模型的场景。
     model = alexnet(weights=None)  # 使用 ImageNet 预训练权重
     # 生成一个随机输入张量，模拟批次大小为 1，图像大小为 224x224，3 个通道（RGB）
     fake_input = torch.randn((1, 3, 224, 224))
