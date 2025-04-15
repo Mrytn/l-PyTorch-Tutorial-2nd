@@ -23,6 +23,7 @@ if __name__ == "__main__":
     resize = Resize(width=224, height=224)  # DualTransform
     img_HorizontalFlip = resize(image=image)['image']
     #  使用 Blur 模糊图像
+    # blur(image=image) 的返回值是一个字典，字典中包含了经过变换后的图像以及其他可能的元数据。['image'] 表示从这个字典中提取出经过变换后的图像。最终，img_ShiftScaleRotate 变量将保存经过模糊变换后的图像。
     blur = Blur(p=1)  # ImageOnlyTransform
     img_ShiftScaleRotate = blur(image=image)['image']
     # 使用 RandomRotate90 随机旋转图像 90 度的倍数

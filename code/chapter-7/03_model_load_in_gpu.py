@@ -53,7 +53,7 @@ if flag:
 flag = 1
 if flag:
     # 用于获取当前系统中可用的 GPU 数量
-    if torch.cuda.device_count() < 1:
+    if torch.cuda.device_count() < 2:
         print("gpu数量不足，请到多gpu环境下运行")
         print(torch.cuda.device_count())
         import sys

@@ -132,6 +132,7 @@ if __name__ == '__main__':
     img_input = img_preprocess(img)
     # 注册hook
     # 存储特征图（网络前向传播时的输出）
+    # 最后一个残差块。也就是说，使用负索引 -1 选取了 layer4 中的最后一个子模块。
     resnet_50.layer4[-1].register_forward_hook(farward_hook)
     # 存储梯度（损失函数对特征图的梯度）
     resnet_50.layer4[-1].register_full_backward_hook(backward_hook)

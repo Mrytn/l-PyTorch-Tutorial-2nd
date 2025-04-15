@@ -79,7 +79,7 @@ if __name__ == '__main__':
         # targets = [e.g ClassifierOutputTarget(281)]
         # You can also pass aug_smooth=True and eigen_smooth=True, to apply smoothing.
         # # 计算 CAM 可视化结果
-        # targets 通常指的是你希望计算激活图时关注的特定类别。none不关注特定类别
+        # targets 通常指的是你希望计算激活图时关注的特定类别（不关注其他类别）。none不关注特定类别
         # # 取出第一张图片的结果
         grayscale_cam = cam(input_tensor=input_tensor, targets=None)  # If targets is None, the highest scoring category
         # In this example grayscale_cam has only one image in the batch:

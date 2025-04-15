@@ -19,6 +19,7 @@ def resize_img_keep_ratio(img_, target_size):
     """
     #  # 原始图像的高度和宽度 (H, W)
     old_size = img_.shape[0:2]  # 原始图像大小
+    # 遍历高度和宽度两个值，缩放比例是高度或宽度相除得到的两个比例中较小的那个，len(old_size)=2
     ratio = min(float(target_size[i]) / (old_size[i]) for i in range(len(old_size)))  # 计算原始图像宽高与目标图像大小的比例，并取其中的较小值
     new_size = tuple([int(i * ratio) for i in old_size])  # 根据上边求得的比例计算在保持比例前提下得到的图像大小
     # OpenCV 的 cv2.resize() 需要 (W, H) 格式，因此 new_size[1] 先放入宽度

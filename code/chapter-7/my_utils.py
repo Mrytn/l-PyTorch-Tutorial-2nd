@@ -405,6 +405,8 @@ def accuracy(output, target, topk=(1,)):
     batch_size = target.size(0)
     # 获取张量中指定维度上的前 maxk 个最大值及其索引
     # 1：指定在维度 1 上进行操作，即按行获取最大值。
+    # True（第一个）：largest 参数，是一个布尔值。如果设置为 True，则返回最大的 k 个元素；如果设置为 False，则返回最小的 k 个元素。这里设置为 True，表示返回最大的 maxk 个元素。
+# True（第二个）：sorted 参数，也是一个布尔值。如果设置为 True，则返回的元素会按照降序排列；如果设置为 False，则不保证返回的元素是有序的。这里设置为 True，表示返回的元素会按照从大到小的顺序排列。
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
     # 将真实标签 target 重塑为形状 (1, batch_size) 的张量

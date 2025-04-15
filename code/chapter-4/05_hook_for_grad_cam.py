@@ -91,8 +91,6 @@ def farward_hook(module, input, output):
 def show_cam_on_image(img, mask, out_dir):
     # 将生成的 CAM 掩码（mask）应用一个颜色映射，转化为热力图（通常使用 JET 颜色图）
     heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_JET)
-    # 将生成的 CAM 掩码（mask）应用一个颜色映射，转化为热力图（通常使用 JET 颜色图）
-    heatmap = np.float32(heatmap) / 255
     # 将热力图与原始图像叠加，生成最终的 CAM 图像。
     cam = heatmap + np.float32(img)
     # 对 CAM 图像进行归一化处理，将其像素值调整到 [0, 1]
