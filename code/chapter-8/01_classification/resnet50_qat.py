@@ -5,6 +5,8 @@
 @date       : 2023-02-04
 @brief      : 肺炎Xray图像分类模型，resnet50 QAT 量化
 """
+from datasets.pneumonia_dataset import PneumoniaDataset
+import utils.my_utils as utils
 import os
 import time
 import datetime
@@ -22,30 +24,40 @@ from pytorch_quantization import quant_modules
 
 matplotlib.use('Agg')
 
-import utils.my_utils as utils
-from datasets.pneumonia_dataset import PneumoniaDataset
-
 
 def get_args_parser(add_help=True):
     import argparse
 
-    parser = argparse.ArgumentParser(description="PyTorch Classification Training", add_help=add_help)
+    parser = argparse.ArgumentParser(
+        description="PyTorch Classification Training", add_help=add_help)
 
-    parser.add_argument("--data-path", default=r"G:\deep_learning_data\chest_xray", type=str, help="dataset path")
-    parser.add_argument("--ckpt-path", default=r"./Result/2023-09-26_01-47-40/checkpoint_best.pth", type=str, help="ckpt path")
+    parser.add_argument(
+        "--data-path", default=r"G:\deep_learning_data\chest_xray", type=str, help="dataset path")
+    parser.add_argument(
+        "--ckpt-path", default=r"./Result/2023-09-26_01-47-40/checkpoint_best.pth", type=str, help="ckpt path")
     parser.add_argument("--model", default="resnet50", type=str,
                         help="model name; resnet50/convnext/convnext-tiny")
-    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
+    parser.add_argument("--device", default="cuda", type=str,
+                        help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
         "-b", "--batch-size", default=8, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
-    parser.add_argument("--epochs", default=5, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument("--epochs", default=5, type=int,
+                        metavar="N", help="number of total epochs to run")
+    # DataLoader 读取数据的线程数
     parser.add_argument(
         "-j", "--workers", default=4, type=int, metavar="N", help="number of data loading workers (default: 4)")
+    # 优化器
     parser.add_argument("--opt", default="sgd", type=str, help="optimizer")
-    parser.add_argument("--random-seed", default=42, type=int, help="random seed")
-    parser.add_argument("--lr", default=0.01/100, type=float, help="initial learning rate")
-    parser.add_argument("--momentum", default=0.9, type=float, metavar="M", help="momentum")
+    # 设置随机种子，保证结果可复现
+    parser.add_argument("--random-seed", default=42,
+                        type=int, help="random seed")
+    parser.add_argument("--lr", default=0.01/100,
+                        type=float, help="initial learning rate")
+    # SGD 动量参数
+    parser.add_argument("--momentum", default=0.9,
+                        type=float, metavar="M", help="momentum")
+    # 权重衰减系数（L2正则化）
     parser.add_argument(
         "--wd",
         "--weight-decay",
@@ -54,9 +66,14 @@ def get_args_parser(add_help=True):
         metavar="W",
         help="weight decay (default: 1e-4)",
         dest="weight_decay",)
-    parser.add_argument("--print-freq", default=20, type=int, help="print frequency")
-    parser.add_argument("--output-dir", default="./Result", type=str, help="path to save outputs")
-    parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
+    # 日志打印频率（每几个 batch 打印一次）
+    parser.add_argument("--print-freq", default=20,
+                        type=int, help="print frequency")
+    parser.add_argument("--output-dir", default="./Result",
+                        type=str, help="path to save outputs")
+    # 指定训练从第几轮开始（用于断点恢复）
+    parser.add_argument("--start-epoch", default=0, type=int,
+                        metavar="N", help="start epoch")
 
     return parser
 
@@ -95,8 +112,10 @@ def main(args):
     valid_set = PneumoniaDataset(valid_dir, transform=valid_transform)
 
     # 构建DataLoder
-    train_loader = DataLoader(dataset=train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
-    valid_loader = DataLoader(dataset=valid_set, batch_size=8, num_workers=args.workers)
+    train_loader = DataLoader(
+        dataset=train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
+    valid_loader = DataLoader(
+        dataset=valid_set, batch_size=8, num_workers=args.workers)
 
     # ------------------------------------ tep2: model ------------------------------------
     if args.model == 'resnet50':
@@ -110,16 +129,17 @@ def main(args):
 
     model_name = model._get_name()
 
-
     if 'ResNet' in model_name:
         # 替换第一层： 因为预训练模型输入是3通道，而本案例是灰度图，输入是1通道
-        model.conv1 = nn.Conv2d(1, 64, (7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        model.conv1 = nn.Conv2d(1, 64, (7, 7), stride=(
+            2, 2), padding=(3, 3), bias=False)
         num_ftrs = model.fc.in_features  # 替换最后一层
         model.fc = nn.Linear(num_ftrs, 2)
     elif 'ConvNeXt' in model_name:
         # 替换第一层： 因为预训练模型输入是3通道，而本案例是灰度图，输入是1通道
         num_kernel = 128 if args.model == 'convnext' else 96
-        model.features[0][0] = nn.Conv2d(1, num_kernel, (4, 4), stride=(4, 4))  # convnext base/ tiny
+        model.features[0][0] = nn.Conv2d(
+            1, num_kernel, (4, 4), stride=(4, 4))  # convnext base/ tiny
         # 替换最后一层
         num_ftrs = model.classifier[2].in_features
         model.classifier[2] = nn.Linear(num_ftrs, 2)
@@ -133,9 +153,14 @@ def main(args):
 
     # ------------------------------------ step3: optimizer, lr scheduler ------------------------------------
     criterion = nn.CrossEntropyLoss()  # 选择损失函数
+    # 使用 随机梯度下降（SGD）+ 动量项（momentum）+ 权重衰减（L2正则化） 来优化模型参数。
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum,
                           weight_decay=args.weight_decay)  # 选择优化器
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=args.lr/100)  # 设置学习率下降策略
+    # 用 余弦退火（Cosine Annealing）策略动态调整学习率，在训练过程中逐渐降低。
+    # T_max 是总轮数（周期长度），eta_min 是最小学习率。
+    # 学习率像余弦曲线一样从高到低平滑下降，这样前期快速学习、后期精细调整，提高收敛质量。
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=args.lr/100)  # 设置学习率下降策略
 
     # ------------------------------------ step4: iteration ------------------------------------
     logger.info(args)
@@ -147,7 +172,8 @@ def main(args):
                                                epoch, device, args, logger, classes)
         # 验证
         loss_m_valid, acc_m_valid, mat_valid = \
-            utils.ModelTrainer.evaluate(valid_loader, model, criterion, device, classes)
+            utils.ModelTrainer.evaluate(
+                valid_loader, model, criterion, device, classes)
 
         lr_current = scheduler.get_last_lr()[0]
         logger.info(
@@ -167,18 +193,22 @@ def main(args):
                                                     verbose=epoch == args.epochs - 1, save=True)
         conf_mat_figure_valid = utils.show_conf_mat(mat_valid, classes, "valid", log_dir, epoch=epoch,
                                                     verbose=epoch == args.epochs - 1, save=True)
-        writer.add_figure('confusion_matrix_train', conf_mat_figure_train, global_step=epoch)
-        writer.add_figure('confusion_matrix_valid', conf_mat_figure_valid, global_step=epoch)
+        writer.add_figure('confusion_matrix_train',
+                          conf_mat_figure_train, global_step=epoch)
+        writer.add_figure('confusion_matrix_valid',
+                          conf_mat_figure_valid, global_step=epoch)
         writer.add_scalar('learning rate', lr_current, epoch)
 
     # ------------------------------------ 训练完毕模型保存 ------------------------------------
     quant_nn.TensorQuantizer.use_fb_fake_quant = True
     for bs in [1, 32]:
-        model_name = "resnet_50_qat_bs{}_{:.2%}.onnx".format(bs, acc_m_valid.avg / 100)
+        model_name = "resnet_50_qat_bs{}_{:.2%}.onnx".format(
+            bs, acc_m_valid.avg / 100)
         onnx_path = os.path.join(log_dir, model_name)
         dummy_input = torch.randn(bs, 1, 224, 224, device='cuda')
         torch.onnx.export(model, dummy_input, onnx_path, opset_version=13, do_constant_folding=False,
                           input_names=['input'], output_names=['output'])
+
 
 classes = ["NORMAL", "PNEUMONIA"]
 

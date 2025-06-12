@@ -23,11 +23,11 @@ class PneumoniaDataset(Dataset):
         """
         self.root_dir = root_dir
         self.transform = transform
-        self.img_info = []  # [(path, label), ... , ]
-        self.label_array = None
+        self.img_info = []  # 用于存储 (图片路径, 标签) 的元组列表
+        self.label_array = None  # 暂时未使用，可以拓展为标签矩阵或多标签任务
         # 由于标签信息是string，需要一个字典转换为模型训练时用的int类型
         self.str_2_int = {"NORMAL": 0, "PNEUMONIA": 1}
-
+        #  # 初始化时，立即调用私有方法获取所有图片的路径和标签
         self._get_img_info()
 
     def __getitem__(self, index):
@@ -70,15 +70,18 @@ class PneumoniaDataset(Dataset):
 
 
 if __name__ == "__main__":
-    root_dir_train = r"G:\deep_learning_data\chest_xray\train"  # path to your data
-    root_dir_valid = r"G:\deep_learning_data\chest_xray\test"   # path to your data
+    root_dir_train = r"bigdata\chapter-8\chest_xray\train"  # path to your data
+    root_dir_valid = r"bigdata\chapter-8\chest_xray\test"   # path to your data
 
     normMean = [0.5]
     normStd = [0.5]
     normTransform = transforms.Normalize(normMean, normStd)
     train_transform = transforms.Compose([
+        # 将图像的最小边缩放到 256 像素（保持比例）
         transforms.Resize(256),
+        # 随机裁剪成 224x224 大小，并在裁剪前随机填充 4 像素边框，用于数据增强。
         transforms.RandomCrop(224, padding=4),
+        # 把 PIL 图像转为 PyTorch Tensor，且会自动除以 255（把像素归一化到 [0, 1]）
         transforms.ToTensor(),
         normTransform
     ])
@@ -90,7 +93,7 @@ if __name__ == "__main__":
 
     train_set = PneumoniaDataset(root_dir_train, transform=train_transform)
     valid_set = PneumoniaDataset(root_dir_valid, transform=valid_transform)
-
+    # shuffle=True	每个 epoch 打乱数据，提升训练效果
     train_loader = DataLoader(dataset=train_set, batch_size=2, shuffle=True)
     for i, (inputs, target) in enumerate(train_loader):
         print(i, inputs.shape, inputs, target.shape, target)
