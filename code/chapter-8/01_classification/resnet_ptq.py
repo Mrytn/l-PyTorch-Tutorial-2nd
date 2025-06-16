@@ -113,6 +113,7 @@ def compute_amax(model, **kwargs):
             # - 直接加载统计到的最大值作为 `amax`。
             if module._calibrator is not None:
                 if isinstance(module._calibrator, calib.MaxCalibrator):
+                    # 加载 MaxCalibrator 统计的最大值为 amax
                     module.load_calib_amax()
                 else:
                     # 否则使用的是 HistogramCalibrator 或其他更高级的校准器（如百分位数）：

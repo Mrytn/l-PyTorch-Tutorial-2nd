@@ -134,11 +134,11 @@ def main(args):
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum,
                           weight_decay=args.weight_decay)  # 选择优化器
     if args.useplateau:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                               factor=0.2, patience=10, cooldown=5, mode='max')
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, factor=0.2, patience=10, cooldown=5, mode='max')
     else:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_step_size,
-                                            gamma=args.lr_gamma)  # 设置学习率下降策略
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=args.lr_step_size, gamma=args.lr_gamma)  # 设置学习率下降策略
 
     # ------------------------------------ step4: iteration ------------------------------------
     best_acc, best_epoch = 0, 0
@@ -151,8 +151,8 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         # 训练
         loss_m_train, acc_m_train, mat_train = \
-            utils.ModelTrainer.train_one_epoch(train_loader, model, criterion, optimizer, scheduler,
-                                               epoch, device, args, logger, classes)
+            utils.ModelTrainer.train_one_epoch(
+                train_loader, model, criterion, optimizer, scheduler, epoch, device, args, logger, classes)
         # 验证
         loss_m_valid, acc_m_valid, mat_valid = \
             utils.ModelTrainer.evaluate(valid_loader, model, criterion, device, classes)
@@ -178,14 +178,14 @@ def main(args):
         else:
             scheduler.step()
         # 记录
-        writer.add_scalars('Loss_group', {'train_loss': loss_m_train.avg,
-                                          'valid_loss': loss_m_valid.avg}, epoch)
-        writer.add_scalars('Accuracy_group', {'train_acc': acc_m_train.avg,
-                                              'valid_acc': acc_m_valid.avg}, epoch)
-        conf_mat_figure_train = utils.show_conf_mat(mat_train, classes, "train", log_dir, epoch=epoch,
-                                                    verbose=epoch == args.epochs - 1, save=True)
-        conf_mat_figure_valid = utils.show_conf_mat(mat_valid, classes, "valid", log_dir, epoch=epoch,
-                                                    verbose=epoch == args.epochs - 1, save=True)
+        writer.add_scalars('Loss_group', {
+                           'train_loss': loss_m_train.avg, 'valid_loss': loss_m_valid.avg}, epoch)
+        writer.add_scalars('Accuracy_group', {
+                           'train_acc': acc_m_train.avg, 'valid_acc': acc_m_valid.avg}, epoch)
+        conf_mat_figure_train = utils.show_conf_mat(
+            mat_train, classes, "train", log_dir, epoch=epoch, verbose=epoch == args.epochs - 1, save=True)
+        conf_mat_figure_valid = utils.show_conf_mat(
+            mat_valid, classes, "valid", log_dir, epoch=epoch, verbose=epoch == args.epochs - 1, save=True)
         writer.add_figure('confusion_matrix_train', conf_mat_figure_train, global_step=epoch)
         writer.add_figure('confusion_matrix_valid', conf_mat_figure_valid, global_step=epoch)
         writer.add_scalar('learning rate', lr_current, epoch)

@@ -174,7 +174,8 @@ def main(args):
         loss_m_valid, acc_m_valid, mat_valid = \
             utils.ModelTrainer.evaluate(
                 valid_loader, model, criterion, device, classes)
-
+        # 获取当前学习率（以列表形式返回，取第一个）
+        # 有几个参数组就有几个学习率，这里只取第一个参数组的学习率
         lr_current = scheduler.get_last_lr()[0]
         logger.info(
             'Epoch: [{:0>3}/{:0>3}]  '
@@ -186,7 +187,8 @@ def main(args):
                 epoch, args.epochs, loss_train=loss_m_train, loss_valid=loss_m_valid,
                 top1_train=acc_m_train, top1_valid=acc_m_valid, lr=lr_current))
 
-        # 学习率更新
+        # 学习率调用
+        # 每调用 step() 满 step_size 次更新
         scheduler.step()
         # 记录
         conf_mat_figure_train = utils.show_conf_mat(mat_train, classes, "train", log_dir, epoch=epoch,
@@ -200,12 +202,16 @@ def main(args):
         writer.add_scalar('learning rate', lr_current, epoch)
 
     # ------------------------------------ 训练完毕模型保存 ------------------------------------
+    # 这段代码的目的是将 QAT（Quantization-Aware Training）后的模型导出为 ONNX 格式，以便进行推理部署
+    # Fake Quantization 是一种模拟量化的方式，它在训练时模拟量化误差，但权重仍然是 float32。
+# 设置这个值可以确保导出 ONNX 时使用 fake quant 算子，而不是真实的 int8 值。
     quant_nn.TensorQuantizer.use_fb_fake_quant = True
     for bs in [1, 32]:
         model_name = "resnet_50_qat_bs{}_{:.2%}.onnx".format(
             bs, acc_m_valid.avg / 100)
         onnx_path = os.path.join(log_dir, model_name)
         dummy_input = torch.randn(bs, 1, 224, 224, device='cuda')
+        # do_constant_folding=False：是否在导出时进行常量折叠优化（此处关闭，可能是为了保持 fake quant ops）
         torch.onnx.export(model, dummy_input, onnx_path, opset_version=13, do_constant_folding=False,
                           input_names=['input'], output_names=['output'])
 
@@ -214,6 +220,12 @@ classes = ["NORMAL", "PNEUMONIA"]
 
 
 if __name__ == "__main__":
+    #     quant_modules 一般来自 from pytorch_quantization import quant_modules
+    # 这行代码会将 PyTorch 中的部分标准层（如 nn.Conv2d, nn.Linear, nn.ReLU 等）替换为它们的可量化版本，如 QuantConv2d、QuantLinear。
+    # 替换后，你原始的模型结构可以直接加入量化节点而无需手动替换每个子模块。
+    # 📌 目的：为 QAT（Quantization-Aware Training）做好模型结构的准备。
+    # 只影响 后续构建 的模型；已构建模型不受影响
+    # 恢复，只需调用 quant_modules.deactivate()。
     quant_modules.initialize()  # 替换torch.nn的常用层，变为可量化的层
 
     args = get_args_parser().parse_args()
