@@ -62,7 +62,9 @@ def get_args_parser(add_help=True):
     parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument('--autoaug', action='store_true', default=False, help='use torchvision autoaugment')
     parser.add_argument('--useplateau', action='store_true', default=False, help='use torchvision autoaugment')
+    # 如果启用这个选项，就会将 encoder 的学习率缩小 10 倍。
     parser.add_argument('--lowlr', action='store_true', default=False, help='encoder lr divided by 10')
+    # 是否使用 BCE（Binary Cross Entropy）损失函数。
     parser.add_argument('--bce', action='store_true', default=False, help='bce loss')
 
     return parser
@@ -81,12 +83,25 @@ def main(args):
     PATCH_SIZE = 256
     train_transform = A.Compose([
         A.Resize(width=PATCH_SIZE, height=PATCH_SIZE),
+        # 左右翻转（50% 概率）
         A.HorizontalFlip(p=0.5),
+        # 上下翻转（50% 概率）
         A.VerticalFlip(p=0.5),
+        # 随机旋转90度（50% 概率）
         A.RandomRotate90(p=0.5),
+        # 行列转置（交换行列，等于对角线翻转）（50% 概率）
         A.Transpose(p=0.5),
+        #  位移、缩放、旋转（25% 概率）
+        # shift_limit=0.01: 平移限制在 ±1% 图像宽高范围
+        # scale_limit=0.04: 缩放限制 ±4%
+        # rotate_limit=0: 不进行旋转（角度限制为 0）
+        # p=0.25: 仅 25% 的图像会应用该增强
         A.ShiftScaleRotate(shift_limit=0.01, scale_limit=0.04, rotate_limit=0, p=0.25),
+        # 图像归一化到 0 附近的均值，并按 ImageNet 标准标准差缩放
+        # max_pixel_value=255. 表示原图像像素最大值是 255，需要先除以 255
         A.Normalize(norm_mean, norm_std, max_pixel_value=255.),
+        # ToTensorV2()：将图像从 numpy 格式转换为 PyTorch 张量
+        # 通道顺序从 HWC（高宽通道）变为 CHW（通道高宽）
         ToTensorV2(),
     ])
 
@@ -100,6 +115,8 @@ def main(args):
     valid_set = BrainMRIDataset(path_valid, valid_transform)
 
     # 构建DataLoder
+    # shuffle=True每个epoch开始时：数据会被重新随机排列。
+# 批次生成：DataLoader 按打乱后的顺序生成批次数据。
     train_loader = DataLoader(dataset=train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
     valid_loader = DataLoader(dataset=valid_set, batch_size=args.batch_size, num_workers=args.workers)
 
@@ -125,18 +142,28 @@ def main(args):
         encoder_params_id = list(map(id, model.encoder.parameters()))
         base_params = filter(lambda p: id(p) not in encoder_params_id, model.parameters())
         optimizer = optim.SGD([
+            # # decoder 等部分使用正常学习率
             {'params': base_params, 'lr': args.lr},  # 0
+            # # encoder 使用低 10 倍的学习率，通常是为了 保留预训练特征，不希望更新太快
             {'params': model.encoder.parameters(), 'lr': args.lr * 0.1}],
+            # momentum：动量，常用于加速收敛（一般取 0.9）
+            # weight_decay：权重衰减，用于正则化（防止过拟合）
             momentum=args.momentum, weight_decay=args.weight_decay)
     else:
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)  # 选择优化器
-
+    # 根据模型效果动态调整学习率
     if args.useplateau:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                               factor=0.1, patience=10, cooldown=5, mode='max')
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            factor=0.1,           # 学习率缩小到原来的 0.1 倍
+            patience=10,          # 指定轮数内没有提升则调整
+            cooldown=5,           # 调整后冷却 5 轮不做改变
+            mode='max'            # 监控指标是“越大越好”的，如 accuracy
+        )
     else:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_step_size,
-                                            gamma=args.lr_gamma)  # 设置学习率下降策略
+        # 使用固定步长衰减
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=args.lr_step_size, gamma=args.lr_gamma)  # 设置学习率下降策略
     # ------------------------------------ step4: iteration ------------------------------------
     best_miou, best_epoch = 0, 0
     logger.info(args)
@@ -170,6 +197,8 @@ def main(args):
 
         # 学习率更新
         if args.useplateau:
+            # 输入的是验证集上的 平均 mIoU（mean Intersection over Union）
+            # 如果该值连续多轮没有“变好”，调度器会自动将学习率降低（如除以 10）
             scheduler.step(miou_m_valid.avg)
         else:
             scheduler.step()
@@ -177,7 +206,7 @@ def main(args):
         writer.add_scalars('Loss_group', {'train_loss': loss_m_train.avg,
                                           'valid_loss': loss_m_valid.avg}, epoch)
         writer.add_scalars('miou_group', {'train_miou': miou_m_train.avg,
-                                              'valid_miou': miou_m_valid.avg}, epoch) 
+                                          'valid_miou': miou_m_valid.avg}, epoch)
         writer.add_scalar('learning rate', lr_current, epoch)
 
         # ------------------------------------ 模型保存 ------------------------------------

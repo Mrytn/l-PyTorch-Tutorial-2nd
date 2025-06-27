@@ -33,6 +33,14 @@ def cv_imread(path_file):
 
 
 def cv_imwrite(path_file, img):
+    # cv2.imencode(".jpg", img)
+    # 将图像 img 编码为 JPG 格式的二进制数据。
+    # 返回两个值：
+    # 第一个是 True/False，表示是否编码成功；
+    # 第二个是编码后的二进制数据（np.ndarray，类型为 uint8）
+    # 取第二个值（即图像的编码字节数据），调用 .tofile(path_file)。
+    # 作用是：将编码后的图像字节直接保存到文件，且 path_file 可以包含中文路径或特殊字符。
+    # .tofile() 是 NumPy 提供的方式，支持任意字符路径，兼容性好。
     _ = cv2.imencode(".jpg", img)[1].tofile(path_file)
     return True
 
@@ -43,7 +51,8 @@ class ModelTrainer(object):
     def train_one_epoch(data_loader, model, loss_f, optimizer, device, args, logger):
         model.train()
         end = time.time()
-
+        # 各种计时与指标器
+        # 平均损失、mIoU、准确率、以及每个 batch 所需的时间
         loss_m = AverageMeter()
         miou_m = AverageMeter()
         acc_m = AverageMeter()
@@ -58,18 +67,26 @@ class ModelTrainer(object):
             # forward & backward
             outputs = model(inputs)
             optimizer.zero_grad()
-
+            # 如果字符串 'BCE' 出现在 loss_f._get_name() 返回的字符串中
             if 'BCE' in loss_f._get_name():
+                # BCE 类型（例如 BCEWithLogitsLoss）通常用于二分类，输入需为浮点数。
                 loss = loss_f(outputs.squeeze(), labels.float())
             else:
+                # ss）通常用于二分类，输入需为浮点数。
+                # 其他类型（如 CrossEntropyLoss）使用整数标签。
                 loss = loss_f(outputs.squeeze(), labels)
             loss.backward()
             optimizer.step()
 
             # 计算miou
+            # outputs.sigmoid()计算0,1之间的概率值
+            # (outputs.sigmoid() > 0.5)得到布尔值
+            # (outputs.sigmoid() > 0.5).float()将布尔值转换为0.0,1.0浮点数
             outputs = (outputs.sigmoid() > 0.5).float()
             labels = labels.unsqueeze(dim=1)
             # Shape of the mask should be [bs, num_classes, h, w] ,for binary segmentation num_classes = 1
+            # .long()：把预测结果转为 torch.int64 类型，因为 get_stats 要求输入是整数类型的分类标签
+            # 表示这是一个 二分类分割任务，即每个像素只有两种类别（通常是前景和背景）。
             tp, fp, fn, tn = smp.metrics.get_stats(outputs.long(), labels, mode="binary")
             # iou_score = smp.metrics.iou_score(tp, fp, fn, tn, reduction="macro")
             iou_score = smp.metrics.iou_score(tp, fp, fn, tn, reduction="macro-imagewise")  # 由于大量阴性图片的存在，因此macro-imagewise的iou要高，且合理

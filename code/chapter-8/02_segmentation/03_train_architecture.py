@@ -125,11 +125,11 @@ def main(args, model):
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)  # 选择优化器
 
     if args.useplateau:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                               factor=0.1, patience=10, cooldown=5, mode='max')
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, factor=0.1, patience=10, cooldown=5, mode='max')
     else:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_step_size,
-                                            gamma=args.lr_gamma)  # 设置学习率下降策略
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=args.lr_step_size, gamma=args.lr_gamma)  # 设置学习率下降策略
     # ------------------------------------ step4: iteration ------------------------------------
     best_miou, best_epoch = 0, 0
     logger.info(args)
@@ -167,10 +167,10 @@ def main(args, model):
         else:
             scheduler.step()
         # 记录
-        writer.add_scalars('Loss_group', {'train_loss': loss_m_train.avg,
-                                          'valid_loss': loss_m_valid.avg}, epoch)
-        writer.add_scalars('miou_group', {'train_miou': miou_m_train.avg,
-                                              'valid_miou': miou_m_valid.avg}, epoch) 
+        writer.add_scalars('Loss_group', {
+                           'train_loss': loss_m_train.avg, 'valid_loss': loss_m_valid.avg}, epoch)
+        writer.add_scalars('miou_group', {
+                           'train_miou': miou_m_train.avg, 'valid_miou': miou_m_valid.avg}, epoch)
         writer.add_scalar('learning rate', lr_current, epoch)
 
         # ------------------------------------ 模型保存 ------------------------------------

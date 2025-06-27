@@ -30,11 +30,16 @@ if platform.system() == 'Linux':
 def get_args_parser(add_help=True):
     import argparse
 
-    parser = argparse.ArgumentParser(description="PyTorch Segmentation Training", add_help=add_help)
-    parser.add_argument("--ckpt-path", default=r"./Result-exp1/2023-03-04_08-34-34/checkpoint_best.pth", type=str, help="ckpt path")
-    parser.add_argument("--encoder", default="resnet18", type=str, help="encoder type, eg: resnet18, mobilenet_v2")
-    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
-    parser.add_argument("--output-dir", default="./inference_result", type=str, help="path to save outputs")
+    parser = argparse.ArgumentParser(
+        description="PyTorch Segmentation Training", add_help=add_help)
+    parser.add_argument(
+        "--ckpt-path", default=r"./Result-exp1/2023-03-04_08-34-34/checkpoint_best.pth", type=str, help="ckpt path")
+    parser.add_argument("--encoder", default="resnet18", type=str,
+                        help="encoder type, eg: resnet18, mobilenet_v2")
+    parser.add_argument("--device", default="cuda", type=str,
+                        help="device (Use cuda or cpu Default: cuda)")
+    parser.add_argument("--output-dir", default="./inference_result",
+                        type=str, help="path to save outputs")
 
     return parser
 
@@ -68,6 +73,7 @@ def main(args):
         ss = time.time()
         for idx in range(len(df)):
             # 读取图片，转换图片
+            # 读取当前图像和对应掩码的路径
             path_img, path_mask = df.iloc[idx, 1], df.iloc[idx, 2]
             image = utils.cv_imread(path_img)
             mask = utils.cv_imread(path_mask)
@@ -77,31 +83,61 @@ def main(args):
             img_tensor = img_tensor.to(device)
 
             s = time.time()
+            # unsqueeze(dim=0)：增加一个 batch 维度，变成 [1, C, H, W]。
+# 通过 repeat(bs, 1, 1, 1) 模拟 batch_size（此处为1，没必要 repeat，但可能是为了兼容更大 batch）
             img_tensor_batch = img_tensor.unsqueeze(dim=0)
             bs = 1
-            img_tensor_batch = img_tensor_batch.repeat(bs, 1, 1, 1)  # 128 or 100 or 1
+            img_tensor_batch = img_tensor_batch.repeat(
+                bs, 1, 1, 1)  # 128 or 100 or 1
 
             # 推理并获取预测概率
             outputs = model(img_tensor_batch)
             outputs_prob = (outputs.sigmoid() > 0.5).float()
+            # 将 tensor 转为 numpy 格式，方便使用 OpenCV
             outputs_prob = outputs_prob.squeeze().cpu().numpy().astype('uint8')
 
             # 可视化
-            output_contours, _ = cv2.findContours(outputs_prob, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
-            mask_contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+            # 这句代码的目标是从模型预测结果中找出所有的轮廓（即前景区域的边界）
+            # cv2.findContours(image, mode, method)
+# image：必须是 二值图像（单通道图像，像素值为 0 或 255），通常经过阈值处理
+            # mode（轮廓检索模式）：mode cv2.RETR_TREE：提取所有轮廓，并构建轮廓的层级树结构
+# method（轮廓逼近方法）：cv2.CHAIN_APPROX_NONE：保留轮廓的所有点，不做压缩。
+# （还有如 CHAIN_APPROX_SIMPLE 仅保留拐点）
+            output_contours, _ = cv2.findContours(
+                outputs_prob, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+            mask_contours, _ = cv2.findContours(
+                mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+            # 判断是否有找到预测轮廓（非空列表）
             if output_contours:
+                # 目标图像：image，在这张图上画轮廓
+                # 轮廓数据：output_contours（模型预测的轮廓）
+                # 绘制索引：-1 表示绘制所有轮廓
+                # 颜色：(0, 255, 0) —— 绿色（预测）
+                # 线宽：1
                 cv2.drawContours(image, output_contours, -1, (0, 255, 0), 1)
             if mask_contours:
+                # 颜色：(0, 0, 255) —— 红色（真实标签）
                 cv2.drawContours(image, mask_contours, -1, (0, 0, 255), 1)
-            cv2.putText(image, "Red   - Ground Ture", (0, 15), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 255), 2)
-            cv2.putText(image, "Green - Model Predict", (0, 30), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 2)
-
+            # image：目标图像，在其上绘制文字
+# "Red - Ground Ture"：文字内容，表示红色代表 ground truth（真实标签）
+# ⚠️ 注意：应为 "Ground Truth"，你写成了 "Ture"（拼写错误）
+# (0, 15)：左下角坐标（x=0, y=15），文本起始点
+# cv2.FONT_HERSHEY_COMPLEX：字体类型（复杂字体）
+# 0.5：字体大小（缩放因子）
+# (0, 0, 255)：颜色（红色）
+# 2：线条粗细（加粗）
+            cv2.putText(image, "Red   - Ground Ture", (0, 15),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.putText(image, "Green - Model Predict", (0, 30),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 2)
+            # 创建保存结果的目录（如果不存在）。
             utils.makedir(result_dir)
             path_save = os.path.join(result_dir, os.path.basename(path_img))
             utils.cv_imwrite(path_save, image)
 
             time_c = time.time() - s
-            print('\r', 'speed: {:.4f} s/batch, Throughput: {:.0f} frame/s'.format(time_c, 1*bs/time_c), end='')
+            print(
+                '\r', 'speed: {:.4f} s/batch, Throughput: {:.0f} frame/s'.format(time_c, 1*bs/time_c), end='')
 
         print('\n', time.time()-ss)
 
