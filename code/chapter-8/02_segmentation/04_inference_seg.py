@@ -85,6 +85,9 @@ def main(args):
             s = time.time()
             # unsqueeze(dim=0)：增加一个 batch 维度，变成 [1, C, H, W]。
 # 通过 repeat(bs, 1, 1, 1) 模拟 batch_size（此处为1，没必要 repeat，但可能是为了兼容更大 batch）
+# 与 expand 区别
+# repeat 会实际复制数据，占用内存大。
+# expand 不会复制数据，更高效，但要求原维度为 1
             img_tensor_batch = img_tensor.unsqueeze(dim=0)
             bs = 1
             img_tensor_batch = img_tensor_batch.repeat(

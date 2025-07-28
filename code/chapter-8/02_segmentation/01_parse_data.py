@@ -119,6 +119,9 @@ def data_analysis():
     ax.set_facecolor((0.15, 0.15, 0.15))
     plt.show()
     # --------------------------------------- 观察正负图片数量比例 ------------------------------------------------------------
+    # .unstack()
+#    把第二级索引（diagnosis）提出来做列
+# .unstack()   # 没有指定 level，默认就是最后一层（level=-1）
     patients_by_diagnosis = dff.groupby(["patient", "diagnosis"])[
         "diagnosis"].size().unstack().fillna(0)
     # 更保险的写法应该根据 diagnosis 原始值判断顺序

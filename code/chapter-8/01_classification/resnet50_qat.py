@@ -66,7 +66,7 @@ def get_args_parser(add_help=True):
         metavar="W",
         help="weight decay (default: 1e-4)",
         dest="weight_decay",)
-    # 日志打印频率（每几个 batch 打印一次）
+    # 日志打印频率（每几轮 epoch 打印一次）
     parser.add_argument("--print-freq", default=20,
                         type=int, help="print frequency")
     parser.add_argument("--output-dir", default="./Result",

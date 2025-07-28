@@ -150,7 +150,9 @@ def main(args):
             # weight_decay：权重衰减，用于正则化（防止过拟合）
             momentum=args.momentum, weight_decay=args.weight_decay)
     else:
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)  # 选择优化器
+        optimizer = optim.SGD(model.parameters(), lr=args.lr,
+                              momentum=args.momentum, weight_decay=args.weight_decay)
+        # 选择优化器
     # 根据模型效果动态调整学习率
     if args.useplateau:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(

@@ -235,6 +235,7 @@ def ptq(args):
 # entropy：KL散度
 # percentile：排除最极端的激活（如 0.1%）
         if args.ptq_method == 'percentile':
+            # 当 method='percentile' 时，用于计算值的百分位点（例如 99.9 表示忽略最大的 0.1%）
             compute_amax(model, method='percentile', percentile=99.9)  # 计算上限、下限，并计算scale 、Z值
         else:
             compute_amax(model, method=args.ptq_method)                     # 计算上限、下限，并计算scale 、Z值
