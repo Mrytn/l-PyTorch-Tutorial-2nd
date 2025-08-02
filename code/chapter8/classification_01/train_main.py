@@ -5,6 +5,8 @@
 @date       : 2023-02-04
 @brief      : 肺炎Xray图像分类训练脚本
 """
+from code.chapter8.classification_01.datasets.pneumonia_dataset import PneumoniaDataset
+import utils.my_utils as utils
 import os
 import time
 import datetime
@@ -16,33 +18,38 @@ from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
 import matplotlib
+from datetime import datetime
 
 matplotlib.use('Agg')
-
-import utils.my_utils as utils
-from datasets.pneumonia_dataset import PneumoniaDataset
 
 
 def get_args_parser(add_help=True):
     import argparse
 
-    parser = argparse.ArgumentParser(description="PyTorch Classification Training", add_help=add_help)
+    parser = argparse.ArgumentParser(
+        description="PyTorch Classification Training", add_help=add_help)
 
-    parser.add_argument("--data-path", default=r"G:\deep_learning_data\chest_xray", type=str, help="dataset path")
+    parser.add_argument(
+        "--data-path", default=r"bigdata\chapter-8\1\ChestXRay2017\chest_xray", type=str, help="dataset path")
     parser.add_argument("--model", default="convnext-tiny", type=str,
                         help="model name; resnet50/convnext/convnext-tiny")
-    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
+    parser.add_argument("--device", default="cuda", type=str,
+                        help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
         "-b", "--batch-size", default=8, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
-    parser.add_argument("--epochs", default=50, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument("--epochs", default=50, type=int,
+                        metavar="N", help="number of total epochs to run")
     parser.add_argument(
         "-j", "--workers", default=4, type=int, metavar="N", help="number of data loading workers (default: 4)"
     )
     parser.add_argument("--opt", default="sgd", type=str, help="optimizer")
-    parser.add_argument("--random-seed", default=42, type=int, help="random seed")
-    parser.add_argument("--lr", default=0.01, type=float, help="initial learning rate")
-    parser.add_argument("--momentum", default=0.9, type=float, metavar="M", help="momentum")
+    parser.add_argument("--random-seed", default=42,
+                        type=int, help="random seed")
+    parser.add_argument("--lr", default=0.01, type=float,
+                        help="initial learning rate")
+    parser.add_argument("--momentum", default=0.9,
+                        type=float, metavar="M", help="momentum")
     parser.add_argument(
         "--wd",
         "--weight-decay",
@@ -52,14 +59,22 @@ def get_args_parser(add_help=True):
         help="weight decay (default: 1e-4)",
         dest="weight_decay",
     )
-    parser.add_argument("--lr-step-size", default=20, type=int, help="decrease lr every step-size epochs")
-    parser.add_argument("--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma")
-    parser.add_argument("--print-freq", default=20, type=int, help="print frequency")
-    parser.add_argument("--output-dir", default="./Result", type=str, help="path to save outputs")
-    parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
-    parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
-    parser.add_argument('--autoaug', action='store_true', default=False, help='use torchvision autoaugment')
-    parser.add_argument('--useplateau', action='store_true', default=False, help='use torchvision autoaugment')
+    parser.add_argument("--lr-step-size", default=20, type=int,
+                        help="decrease lr every step-size epochs")
+    parser.add_argument("--lr-gamma", default=0.1, type=float,
+                        help="decrease lr by a factor of lr-gamma")
+    parser.add_argument("--print-freq", default=20,
+                        type=int, help="print frequency")
+    parser.add_argument("--output-dir", default="./Result",
+                        type=str, help="path to save outputs")
+    parser.add_argument("--resume", default="", type=str,
+                        help="path of checkpoint")
+    parser.add_argument("--start-epoch", default=0, type=int,
+                        metavar="N", help="start epoch")
+    parser.add_argument('--autoaug', action='store_true',
+                        default=False, help='use torchvision autoaugment')
+    parser.add_argument('--useplateau', action='store_true',
+                        default=False, help='use torchvision autoaugment')
 
     return parser
 
@@ -98,8 +113,10 @@ def main(args):
     valid_set = PneumoniaDataset(valid_dir, transform=valid_transform)
 
     # 构建DataLoder
-    train_loader = DataLoader(dataset=train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
-    valid_loader = DataLoader(dataset=valid_set, batch_size=8, num_workers=args.workers)
+    train_loader = DataLoader(
+        dataset=train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
+    valid_loader = DataLoader(
+        dataset=valid_set, batch_size=8, num_workers=args.workers)
 
     # ------------------------------------ tep2: model ------------------------------------
     if args.model == 'resnet50':
@@ -113,16 +130,17 @@ def main(args):
 
     model_name = model._get_name()
 
-
     if 'ResNet' in model_name:
         # 替换第一层： 因为预训练模型输入是3通道，而本案例是灰度图，输入是1通道
-        model.conv1 = nn.Conv2d(1, 64, (7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        model.conv1 = nn.Conv2d(1, 64, (7, 7), stride=(
+            2, 2), padding=(3, 3), bias=False)
         num_ftrs = model.fc.in_features  # 替换最后一层
         model.fc = nn.Linear(num_ftrs, 2)
     elif 'ConvNeXt' in model_name:
         # 替换第一层： 因为预训练模型输入是3通道，而本案例是灰度图，输入是1通道
         num_kernel = 128 if args.model == 'convnext' else 96
-        model.features[0][0] = nn.Conv2d(1, num_kernel, (4, 4), stride=(4, 4))  # convnext base/ tiny
+        model.features[0][0] = nn.Conv2d(
+            1, num_kernel, (4, 4), stride=(4, 4))  # convnext base/ tiny
         # 替换最后一层
         num_ftrs = model.classifier[2].in_features
         model.classifier[2] = nn.Linear(num_ftrs, 2)
@@ -155,12 +173,14 @@ def main(args):
                 train_loader, model, criterion, optimizer, scheduler, epoch, device, args, logger, classes)
         # 验证
         loss_m_valid, acc_m_valid, mat_valid = \
-            utils.ModelTrainer.evaluate(valid_loader, model, criterion, device, classes)
+            utils.ModelTrainer.evaluate(
+                valid_loader, model, criterion, device, classes)
 
         epoch_time_m.update(time.time() - end)
         end = time.time()
 
-        lr_current = scheduler.optimizer.param_groups[0]['lr'] if args.useplateau else scheduler.get_last_lr()[0]
+        lr_current = scheduler.optimizer.param_groups[0]['lr'] if args.useplateau else scheduler.get_last_lr()[
+            0]
         logger.info(
             'Epoch: [{:0>3}/{:0>3}]  '
             'Time: {epoch_time.val:.3f} ({epoch_time.avg:.3f})  '
@@ -186,8 +206,10 @@ def main(args):
             mat_train, classes, "train", log_dir, epoch=epoch, verbose=epoch == args.epochs - 1, save=True)
         conf_mat_figure_valid = utils.show_conf_mat(
             mat_valid, classes, "valid", log_dir, epoch=epoch, verbose=epoch == args.epochs - 1, save=True)
-        writer.add_figure('confusion_matrix_train', conf_mat_figure_train, global_step=epoch)
-        writer.add_figure('confusion_matrix_valid', conf_mat_figure_valid, global_step=epoch)
+        writer.add_figure('confusion_matrix_train',
+                          conf_mat_figure_train, global_step=epoch)
+        writer.add_figure('confusion_matrix_valid',
+                          conf_mat_figure_valid, global_step=epoch)
         writer.add_scalar('learning rate', lr_current, epoch)
 
         # ------------------------------------ 模型保存 ------------------------------------
@@ -201,7 +223,8 @@ def main(args):
                 "epoch": epoch,
                 "args": args,
                 "best_acc": best_acc}
-            pkl_name = "checkpoint_{}.pth".format(epoch) if epoch == args.epochs - 1 else "checkpoint_best.pth"
+            pkl_name = "checkpoint_{}.pth".format(
+                epoch) if epoch == args.epochs - 1 else "checkpoint_best.pth"
             path_checkpoint = os.path.join(log_dir, pkl_name)
             torch.save(checkpoint, path_checkpoint)
             logger.info(f'save ckpt done! best acc:{best_acc}, epoch:{epoch}')
@@ -217,4 +240,6 @@ if __name__ == "__main__":
     args = get_args_parser().parse_args()
     utils.setup_seed(args.random_seed)
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("开始：", datetime.now())
     main(args)
+    print("结束：", datetime.now())
