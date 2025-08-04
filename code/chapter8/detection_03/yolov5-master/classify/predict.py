@@ -172,7 +172,7 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights2', nargs='+', type=str,
+    parser.add_argument('--weights3', nargs='+', type=str,
                         default=ROOT / 'yolov5s-cls.pt', help='model path(s)')
     parser.add_argument('--weights', nargs='+', type=str,
                         default=ROOT / 'yolov5s-cls.pt', help='model path(s)')
