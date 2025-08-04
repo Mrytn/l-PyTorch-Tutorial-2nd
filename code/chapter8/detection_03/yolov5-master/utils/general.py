@@ -227,18 +227,31 @@ def methods(instance):
     # Get class/instance methods
     return [f for f in dir(instance) if callable(getattr(instance, f)) and not f.startswith('__')]
 
-
+# args: Optional[dict] = None 表示 args 可以是字典，也可以是空值 None，如果你不传它，它默认为 None。这是类型标注 + 默认参数的标准写法。
 def print_args(args: Optional[dict] = None, show_file=True, show_func=False):
     # Print function arguments (optional args dict)
+    # 当前帧是 `print_args`，`.f_back` 是上一帧 → 即调用 `print_args()` 的地方- 所以 `x` 是调用者的堆栈帧
     x = inspect.currentframe().f_back  # previous frame
+    # 获取调用者所在的：
+# file: 文件名
+# func: 函数名
     file, _, func, _, _ = inspect.getframeinfo(x)
     if args is None:  # get args automatically
+        # 如果没有手动传 `args`，就自动获取调用函数的参数
+        # - `inspect.getargvalues(x)` 返回调用者函数的参数名和值
+        # - `frm` 是当前作用域变量字典
+        # - 最终保留的是函数参数名和值的对应字典
         args, _, _, frm = inspect.getargvalues(x)
         args = {k: v for k, v in frm.items() if k in args}
     try:
+        # 把文件路径转成相对路径（相对 ROOT）
+        # 去掉 .py 后缀
         file = Path(file).resolve().relative_to(ROOT).with_suffix('')
     except ValueError:
+        # 如果相对失败（不在项目目录中），就用文件名（不带 .py）
         file = Path(file).stem
+# 构建一个前缀字符串：
+# - 例如 `train: `
     s = (f'{file}: ' if show_file else '') + (f'{func}: ' if show_func else '')
     LOGGER.info(colorstr(s) + ', '.join(f'{k}={v}' for k, v in args.items()))
 
