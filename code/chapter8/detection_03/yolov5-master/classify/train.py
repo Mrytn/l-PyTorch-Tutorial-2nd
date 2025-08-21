@@ -13,43 +13,57 @@ YOLOv5-cls models:  --model yolov5n-cls.pt, yolov5s-cls.pt, yolov5m-cls.pt, yolo
 Torchvision models: --model resnet50, efficientnet_b0, etc. See https://pytorch.org/vision/stable/models.html
 """
 
-import argparse
-import os
+'''======================1.导入安装好的python库====================='''
+import torchvision
 import subprocess
-import sys
-import time
-from copy import deepcopy
-from datetime import datetime
-from pathlib import Path
-
+import torch.distributed as dist    # 分布式训练模块
 import torch
-import torch.distributed as dist
+from pathlib import Path  # Path将str转换为Path对象 使字符串路径易于操作的模块
+import sys
+import os
+from datetime import datetime
+import time
+from copy import deepcopy# 深度拷贝模块
+from torch.cuda import amp  # PyTorch amp自动混合精度训练模块
+from classify import val as validate    # 这个是测试集
+import argparse
 import torch.hub as hub
 import torch.optim.lr_scheduler as lr_scheduler
-import torchvision
-from torch.cuda import amp
-from tqdm import tqdm
 
+from tqdm import tqdm
+'''===================2.获取当前文件的绝对路径========================'''
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
-
-from classify import val as validate
+'''===================3..加载自定义模块============================'''
+# 实验性质的代码，包括MixConv2d、跨层权重Sum等
 from models.experimental import attempt_load
+# yolo的特定模块，包括BaseModel，DetectionModel，ClassificationModel，parse_model等
 from models.yolo import ClassificationModel, DetectionModel
 from utils.dataloaders import create_classification_dataloader
 from utils.general import (DATASETS_DIR, LOGGER, TQDM_BAR_FORMAT, WorkingDirectory, check_git_info, check_git_status,
                            check_requirements, colorstr, download, increment_path, init_seeds, print_args, yaml_save)
 from utils.loggers import GenericLogger
+# 定义了Annotator类，可以在图像上绘制矩形框和标注信息
 from utils.plots import imshow_cls
+# 定义了一些与PyTorch有关的工具函数，比如选择设备、同步时间等
 from utils.torch_utils import (ModelEMA, de_parallel, model_info, reshape_classifier_output, select_device, smart_DDP,
                                smart_optimizer, smartCrossEntropyLoss, torch_distributed_zero_first)
-
+'''================4.分布式训练初始化==========================='''
+# LOCAL_RANK：用于指定 当前进程在当前机器上的 GPU 编号
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
+# 获取全局进程编号（rank），通常是跨多机训练时每个进程的唯一编号
+# RANK 是一个进程在所有进程中的编号，比如你有 4 台机器，每台跑 2 个进程，总共 8 个进程，那么 RANK 从 0 到 7。
 RANK = int(os.getenv('RANK', -1))
+# WORLD_SIZE 表示所有机器总共运行了多少个训练进程
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
+# 这个函数通常是自定义的，用来读取当前代码仓库的 Git 信息，如：
+# 当前 Git commit ID
+# 当前是否是 clean 状态
+# 当前分支名等
+# 用于在日志中记录版本，方便追踪模型训练时对应的代码版本。
 GIT_INFO = check_git_info()
 
 
@@ -297,10 +311,13 @@ def parse_opt(known=False):
 
 def main(opt):
     # Checks
-    if RANK in {-1, 0}:
-        print_args(vars(opt))
-        check_git_status()
-        check_requirements()
+    '''
+    2.1  检查分布式训练环境
+    '''
+    if RANK in {-1, 0}:  # 若进程编号为-1或0
+        print_args(vars(opt))  # 输出所有训练参数
+        check_git_status()  # 检测YOLO v5的github仓库是否更新，若已更新，给出提示
+        check_requirements()  # 检查requirements.txt所需包是否都满足
 
     # DDP mode
     device = select_device(opt.device, batch_size=opt.batch_size)
