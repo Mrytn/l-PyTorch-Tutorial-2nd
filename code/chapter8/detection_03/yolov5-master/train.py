@@ -674,127 +674,292 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     last_opt_step = -1
     # 存放每个类别的 mAP（初始为 0）
     maps = np.zeros(nc)  # mAP per class
-    # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
+    # 保存一次验证的指标P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     results = (0, 0, 0, 0, 0, 0, 0)
+    # 确保从 start_epoch 开始衔接学习率计划（比如断点恢复时）。
     scheduler.last_epoch = start_epoch - 1  # do not move
+    # 混合精度训练的工具，能自动缩放梯度，防止 FP16 下溢出。
     scaler = torch.cuda.amp.GradScaler(enabled=amp)
+    # 如果验证集指标在 patience 个 epoch 内没有提升，就提前停止训练
+    # 在训练或推理过程中，如果 stop=True，那就代表需要提前终止某些操作（比如提前结束 profiling、跳出循环、停止训练等）。
+# 配合外部条件：有时 stop 会在别的地方被修改成 True，代码就会根据这个状态决定要不要继续执行某些逻辑。
     stopper, stop = EarlyStopping(patience=opt.patience), False
+    # YOLOv5 自定义的损失函数，包含 box loss + obj loss + cls loss。
+# 会根据 model 的结构自动绑定正确的输出层
     compute_loss = ComputeLoss(model)  # init loss class
+    # 触发训练开始的回调
+    # 通知回调系统“训练要开始了”，并打印关键信息
     callbacks.run('on_train_start')
+    # 打印训练配置，包括：
+# 训练/验证图片大小
+# dataloader 进程数（worker 数 × GPU 数）
+# 日志保存路径
+# 训练总 epoch 数
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
+    '''
+    4.3 开始训练
+    '''
     # epoch ------------------------------------------------------------------
     for epoch in range(start_epoch, epochs):
+        '''
+        告诉模型现在是训练阶段 因为BN层、DropOut层、两阶段目标检测模型等
+        训练阶段阶段和预测阶段进行的运算是不同的，所以要将二者分开
+        model.eval()指的是预测推断阶段
+        '''
         callbacks.run('on_train_epoch_start')
         model.train()
 
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
+            # 计算类别权重（class weights），主要依据 模型当前的性能(maps) 调整。
+# maps 是每个类别的 mAP（平均精度），如果某个类别的 map 很低，那它的 (1 - map)^2 就比较大 → 权重大。
+# 意思是：模型学得差的类别会被加大训练权重。
             cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
+            # 把类别权重映射到每张图片，得到 图片权重。
             iw = labels_to_image_weights(
                 dataset.labels, nc=nc, class_weights=cw)  # image weights
+            # 用这些权重重新随机采样图片。
+# 权重高的图片被采样的概率更大 → 训练时会被“看到”更多次。
+# k=dataset.n 表示会抽取 与数据集大小相同数量的索引，即抽取k个
             dataset.indices = random.choices(
                 range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx
 
         # Update mosaic border (optional)
         # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
-
+        # 创建一个张量 [0, 0, 0]，用来存放当前 epoch 的 平均损失
+        # 边框回归损失 (box_loss)、目标置信度损失 (obj_loss) 和 类别分类损失 (cls_loss)
         mloss = torch.zeros(3, device=device)  # mean losses
         if RANK != -1:
+            # 会把当前 epoch 传给 DistributedSampler，内部会用 epoch 作为随机数种子的一部分，重新打乱数据顺序。这样：
+# 不同 epoch → shuffle 不同
+# 因为种子变了，每个 epoch 的顺序都不一样。
+# 不同进程之间不会重复
+# 在同一个 epoch 内，虽然所有进程用的是同样的 shuffle 顺序（同一份打乱后的 indices），
+# 但 DistributedSampler 会按 rank 切片（比如 world_size=4，就把 indices 分成4段），
+# 所以 rank0、rank1、rank2、rank3 各自拿到的部分是互不重叠的。
             train_loader.sampler.set_epoch(epoch)
+        # 遍历数据加载器，得到 batch 索引 + 数据
         pbar = enumerate(train_loader)
+        # 印日志表头，方便训练过程记录。
         LOGGER.info(('\n' + '%11s' * 7) % ('Epoch', 'GPU_mem',
                     'box_loss', 'obj_loss', 'cls_loss', 'Instances', 'Size'))
         if RANK in {-1, 0}:
             # progress bar
+            # 如果是单卡训练（RANK = -1）或者是 主进程（RANK = 0），就用 tqdm 加上 进度条。
+# 多卡训练时只有主进程打印进度，避免日志混乱。
+# pbar 是一个可迭代对象，包含每个 batch 的索引和数据。
+# nb 是每个 epoch 的 batch 数量。
+# bar_format 是 tqdm 的格式化字符串，用来控制进度条的显示样式。
             pbar = tqdm(pbar, total=nb, bar_format=TQDM_BAR_FORMAT)
+        # 清空上一次迭代的梯度，防止梯度累加
         optimizer.zero_grad()
         # batch -------------------------------------------------------------
         for i, (imgs, targets, paths, _) in pbar:
             callbacks.run('on_train_batch_start')
             # number integrated batches (since train start)
+            # 全局的 batch 索引（从训练开始算的第几个 batch）。
+            # 这样可以保证 warmup 是跨 epoch 连续计算的，而不是每个 epoch 重新开始
             ni = i + nb * epoch
             imgs = imgs.to(device, non_blocking=True).float() / \
                 255  # uint8 to float32, 0-255 to 0.0-1.0
 
             # Warmup
+            # 当前还在 warmup 阶段
+            # nw：warmup 的总迭代次数（一般取 max(3个epoch, 100 iter)）
             if ni <= nw:
+                # 定义插值区间
                 xi = [0, nw]  # x interp
                 # compute_loss.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
+                # np.interp(ni, xi, [1, nbs / batch_size])：线性插值。
+# 在 warmup 过程中，accumulate 会从 1 慢慢增加到 nbs / batch_size。
+# accumulate 控制 梯度累积步数，相当于动态模拟大 batch
                 accumulate = max(1, np.interp(
                     ni, xi, [1, nbs / batch_size]).round())
                 for j, x in enumerate(optimizer.param_groups):
                     # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
+                    # j == 0 → 表示 bias 的参数组，bias 在 warmup 初期给一个较高的学习率（hyp['warmup_bias_lr']）。
+# 其他参数组 → 从 0 慢慢升到目标学习率 x['initial_lr'] * lf(epoch)。
+# lf(epoch) → 学习率调度函数（cosine/linear），控制大趋势。
+# 整体：先热身（warmup），再进入正常调度。
                     x['lr'] = np.interp(
                         ni, xi, [hyp['warmup_bias_lr'] if j == 0 else 0.0, x['initial_lr'] * lf(epoch)])
                     if 'momentum' in x:
+                        # momentum 从 warmup_momentum（通常比较低，比如 0.8）逐渐增加到 hyp['momentum']（通常 0.937）。
+# 作用：在训练初期，降低动量 → 让参数更新更灵活，避免过早收敛。
                         x['momentum'] = np.interp(
                             ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
 
             # Multi-scale
+            # 开启多尺度训练
+            # 多尺度训练的目的是让模型在不同分辨率下都能学到鲁棒特征，提高检测对小/大目标的适应能力。
             if opt.multi_scale:
+                # imgsz：目标图像大小（比如 640）
+# 乘以 0.5 和 1.5，意味着在 原图尺寸的 50% ~ 150% 范围内随机缩放
+# + gs：为了后面取整对齐步长（grid size）做微调
+# 从 [start, stop) 范围内随机选择一个整数
+# 这里就是随机选择一个缩放后的尺寸
+# // gs：整除，得到最近的 网格（grid）单位）
+# * gs：再乘回去，保证尺寸是 gs 的整数倍
+# 目的：保证输入尺寸对齐到网络的下采样倍数（YOLO 特征图要求）
                 sz = random.randrange(
                     imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs  # size
+                # 计算缩放比例
+                # imgs.shape[2:] → 当前 batch 的 图片高和宽
+# max(imgs.shape[2:]) → 取当前图片的最大边
+# sf → 缩放因子 = 新尺寸 / 当前最大边
                 sf = sz / max(imgs.shape[2:])  # scale factor
                 if sf != 1:
                     # new shape (stretched to gs-multiple)
+                    # 计算新的图片形状 ns（高和宽）
+# math.ceil(x * sf / gs) * gs → 先按比例缩放，再向上取整到 stride 的整数倍，保证下采样对齐
+# x * sf 这一部分表示 按缩放比例调整后的尺寸
+# x * sf / gs除以 gs 后，相当于计算 缩放后的尺寸包含多少个网格单位
+# math.ceil(...)向上取整，保证 网格单位数向上取整。这样即使缩放后的尺寸不是 gs 的整数倍，也不会小于原来的尺寸
+# * gs得到 对齐后的最终尺寸保证输入尺寸是 gs 的倍数，符合网络要求
                     ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]
+                    # 图片插值缩放
+                    # size=ns：目标尺寸
+                    # mode='bilinear'：插值模式，双线性插值
+                    # align_corners=False：不对齐角点（保持插值一致性）
                     imgs = nn.functional.interpolate(
                         imgs, size=ns, mode='bilinear', align_corners=False)
 
             # Forward
+            # 正向传播
+            # 当 amp=True 时开启 自动混合精度 (Automatic Mixed Precision)
+# 前向传播和部分计算使用 float16，减少显存占用，加快训练速度
+# 反向传播时仍会用 float32 计算梯度
             with torch.cuda.amp.autocast(amp):
+                # 将 batch 图片送入模型，得到预测输出
+# pred 是 YOLOv5 的检测层输出，每个预测包含 bbox, obj, class 信息
                 pred = model(imgs)  # forward
+                # loss → 总损失，已经按 batch_size 缩放
+# loss_items → [box_loss, obj_loss, cls_loss] 三个部分的损失
                 loss, loss_items = compute_loss(
                     pred, targets.to(device))  # loss scaled by batch_size
                 if RANK != -1:
+                    # 如果是 DDP 多卡训练（RANK != -1），PyTorch 会对梯度进行平均
+# 因为 loss 在每个卡上都是 batch 平均，所以要乘以 WORLD_SIZE，保证 总梯度和单卡训练一致
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    # opt.quad=True 表示开启 四倍数据增强（Quad-Data Augmentation）
+# quad 会将一个 batch 复制 4 次（不同增强），所以 loss 需要乘 4 来抵消平均化
                 if opt.quad:
                     loss *= 4.
 
             # Backward
+            # 反向传播
+            # scaler 是 torch.cuda.amp.GradScaler，用于 自动混合精度（AMP）训练
+# scaler.scale(loss)：将 loss 放大，防止 float16 下梯度溢出
+# .backward()：计算梯度，累加到模型参数的 .grad
             scaler.scale(loss).backward()
-
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
+            # 梯度累计判断
+            # accumulate：前面 warmup 时计算的梯度累积步数
+# 作用：每 accumulate 个 batch 才更新一次权重
+# ni - last_opt_step → 当前 batch 距离上一次 optimizer step 的 batch 数
             if ni - last_opt_step >= accumulate:
+                # 背景：在 PyTorch 的 torch.cuda.amp 混合精度训练中，梯度会被 放大（scale） 以防止 float16 下溢（梯度过小变成 0）。
+                # unscale_：把梯度从放大状态恢复，这样才能安全地进行 梯度裁剪 或其他梯度操作
                 scaler.unscale_(optimizer)  # unscale gradients
+                # 对模型参数的梯度进行 范数裁剪
+                # max_norm=10.0：梯度的 最大 L2 范数，超过这个值会按比例缩小
+                # 防止梯度爆炸（特别是 RNN 或深层网络） 保持训练稳定
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=10.0)  # clip gradients
+                '''
+                 scaler.step()首先把梯度的值unscale回来，
+                 如果梯度的值不是 infs 或者 NaNs, 那么调用optimizer.step()来更新权重,
+                 否则，忽略step调用，从而保证权重不更新（不被破坏）
+                '''
+                # 真正执行 参数更新
                 scaler.step(optimizer)  # optimizer.step
+                # 根据梯度是否溢出更新放大比例
                 scaler.update()
+                # 清空梯度，为下一次迭代准备
                 optimizer.zero_grad()
                 if ema:
+                    # 平滑参数更新
+# 在验证和推理阶段，使用 EMA 模型通常表现更稳定
                     ema.update(model)
+                # 更新 last_opt_step，记录上一次优化器更新的 batch 索引
                 last_opt_step = ni
 
             # Log
             if RANK in {-1, 0}:
+                # 平均损失更新
+                # mloss 是 每个 batch 的滑动平均损失，维度 3 → [box_loss, obj_loss, cls_loss]
+                # i → 当前 batch 索引
+                # 用前面所有 batch 的平均损失和当前 batch 损失重新计算平均值
+                # 作用：在进度条上显示当前 epoch 的平均损失
                 mloss = (mloss * i + loss_items) / \
                     (i + 1)  # update mean losses
                 # (GB)
+                # 显存记录
+                # torch.cuda.memory_reserved() → 当前 GPU 已经申请的显存（单位字节）
+# /1E9 → 转换成 GB
+# 如果没有 GPU → 置 0
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'
+                # 更新 tqdm 进度条描述
+                # set_description → 更新进度条文字
+                # 显示内容：
+# 当前 epoch / 总 epoch
+# 已使用 GPU 显存
+# 平均 box_loss, obj_loss, cls_loss
+# 当前 batch 内样本数（targets.shape[0]）
+# 当前 batch 图片尺寸（imgs.shape[-1]，一般为正方形边长）
                 pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
                                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
+                # 调用 训练 batch 结束回调
+                # 可以在这里记录日志、写 TensorBoard、保存可视化结果等
                 callbacks.run('on_train_batch_end', model, ni,
                               imgs, targets, paths, list(mloss))
+                # 提前停止判断
+                # 回调里可以设置 stop_training=True 就会提前结束训练
                 if callbacks.stop_training:
                     return
             # end batch ------------------------------------------------------------------------------------------------
 
+        '''
+        4.4 训练完成保存模型
+        '''
         # Scheduler
+        # lr → 当前所有参数组的学习率，用于记录日志
         lr = [x['lr'] for x in optimizer.param_groups]  # for loggers
+        # lr → 当前所有参数组的学习率，用于记录日志
         scheduler.step()
 
         if RANK in {-1, 0}:
             # mAP
+            # 回调系统：在每个 epoch 结束时触发
+# 可以做日志记录、模型状态更新等
             callbacks.run('on_train_epoch_end', epoch=epoch)
+            # EMA 模型属性更新
+            # EMA = 指数滑动平均模型
+# 这里将模型的一些 静态属性 更新到 EMA 模型：
+# yaml → 模型配置
+# nc → 类别数
+# hyp → 超参数
+# names → 类名
+# stride → 特征层 stride
+# class_weights → 类别权重
+# 作用：保持 EMA 模型与当前训练模型同步重要属性，便于验证和推理
             ema.update_attr(
                 model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
+            # 判断是否最终 epoch
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
+            # noval → 用户是否禁用验证
+# 如果不禁用验证或者到最后 epoch 则进行 mAP 计算
             if not noval or final_epoch:  # Calculate mAP
+                # 使用 EMA 模型 进行验证，通常比训练模型更稳定
+                # 输出：
+# results → 各项验证指标（box loss, obj loss, cls loss, P, R, mAP@0.5, mAP@0.5-0.95）
+# maps → 每个类别的 mAP
+# _ → 其他信息（一般不关注）
+# 验证时使用的 batch size 会稍大（*2），半精度 half=amp 节省显存
                 results, maps, _ = validate.run(data_dict,
                                                 batch_size=batch_size // WORLD_SIZE * 2,
                                                 imgsz=imgsz,
@@ -809,16 +974,47 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
             # Update best mAP
             # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
+            # 计算当前 epoch 的“fitness”
+            # np.array(results).reshape(1, -1) → 将其变成二维数组（1 行，多列）
+# fitness() → 计算 综合指标，YOLOv5 默认公式是：
+# fitness = 0.1 * P + 0.1 * R + 0.4 * mAP@0.5 + 0.4 * mAP@0.5-0.95
+# 作用：把多指标压缩成一个单值，用于比较哪个 epoch 最优
             fi = fitness(np.array(results).reshape(1, -1))
+            # stopper 是 EarlyStopping 对象
+# 根据当前 epoch 和 fitness 判断是否满足提前停止条件
+# 返回 stop=True → 可以提前结束训练
             stop = stopper(epoch=epoch, fitness=fi)  # early stop check
+            # 更新最佳 fitness
             if fi > best_fitness:
                 best_fitness = fi
+            # mloss → 平均损失 [box_loss, obj_loss, cls_loss]
+# results → 验证指标 [P, R, mAP@0.5, mAP@0.5-0.95, val_losses...]
+# lr → 当前学习率
+# 拼成一个列表 → 用于日志记录
             log_vals = list(mloss) + list(results) + lr
+            # 回调函数：epoch 结束
+# 可以用来：
+# 记录日志（CSV、TensorBoard）
+# 保存训练信息
+# 其他自定义操作
             callbacks.run('on_fit_epoch_end', log_vals,
                           epoch, best_fitness, fi)
 
             # Save model
+            # 平时训练且没禁止保存 → 保存
+# 最后 epoch 且不是进化模式 → 保存
             if (not nosave) or (final_epoch and not evolve):  # if save
+                # 构建 checkpoint 字典
+                # epoch → 当前训练轮数
+# best_fitness → 目前最优的 fitness
+# model → 当前模型（去掉 DataParallel 包装，半精度 float16）
+# ema → EMA 模型（半精度）
+# updates → EMA 更新次数
+# optimizer → 优化器状态（momentum, lr 等）
+# opt → 训练参数字典
+# git → git 信息（版本控制，便于复现）
+# date → 保存时间戳
+# deepcopy(de_parallel(model)) 是为了防止保存时 DataParallel 或原模型被修改影响 ckpt
                 ckpt = {
                     'epoch': epoch,
                     'best_fitness': best_fitness,
@@ -831,35 +1027,60 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                     'date': datetime.now().isoformat()}
 
                 # Save last, best and delete
+                # last.pt → 总是覆盖当前最新模型
                 torch.save(ckpt, last)
                 if best_fitness == fi:
+                    # best.pt → 如果当前 epoch fitness 是最好 → 保存最佳模型
                     torch.save(ckpt, best)
                 if opt.save_period > 0 and epoch % opt.save_period == 0:
+                    # epochX.pt → 按 save_period 周期保存中间模型
                     torch.save(ckpt, w / f'epoch{epoch}.pt')
+                # 删除临时 ckpt 对象，释放 GPU/CPU 内存
                 del ckpt
+                # 触发保存回调
                 callbacks.run('on_model_save', last, epoch,
                               final_epoch, best_fitness, fi)
 
         # EarlyStopping
         if RANK != -1:  # if DDP training
+            # 主进程（RANK == 0）把 stop 放进一个列表里。
+# 其他进程只放一个 None 占位。
             broadcast_list = [stop if RANK == 0 else None]
             # broadcast 'stop' to all ranks
+            # 让所有进程的 broadcast_list 同步成主进程的值。
+# src=0 表示以 rank 0 作为数据源
             dist.broadcast_object_list(broadcast_list, 0)
             if RANK != 0:
+                # 其他进程从 broadcast_list[0] 里拿到主进程的 stop，实现 状态同步。
                 stop = broadcast_list[0]
+        # 停止训练
+        # 这个 break 会跳出 epoch/iteration 的训练循环。
+# 因为外面还有一个 for epoch in range(start, epochs): 的循环，一旦 break，训练主循环就结束了
         if stop:
             break  # must break all DDP ranks
 
         # end epoch ----------------------------------------------------------------------------------------------------
+    '''
+    4.5 打印信息并释放显存
+    '''
     # end training -----------------------------------------------------------------------------------------------------
     if RANK in {-1, 0}:
+        # 这里会输出训练用了多少个 epoch、总共多少小时。
         LOGGER.info(
             f'\n{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.')
+        # last.pt = 最近一次训练的权重；
+# best.pt = 在验证集上表现最好的权重；
         for f in last, best:
             if f.exists():
+                # strip_optimizer(f) = 去掉里面的 优化器状态、scheduler 等不必要内容，只保留模型权重 → 文件更小，更方便部署。
                 strip_optimizer(f)  # strip optimizers
                 if f is best:
                     LOGGER.info(f'\nValidating {f}...')
+                    # 这里重新加载 best.pt，并在验证集上跑一次 validate.run：
+# 计算 mAP@0.5、mAP@0.5:0.95 等指标；
+# 还可以生成可视化结果 (plots)；
+# 如果是 COCO 数据集，还会生成 json 提交结果。
+# 等于说：最后再确认一下你保存的 最佳模型 的真实性能
                     results, _, _ = validate.run(
                         data_dict,
                         batch_size=batch_size // WORLD_SIZE * 2,
@@ -875,12 +1096,19 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                         callbacks=callbacks,
                         compute_loss=compute_loss)  # val best model with plots
                     if is_coco:
+                        # 回调 on_train_end
+                        # 这是 训练结束的钩子，常见用途：
+# 通知日志系统（如 TensorBoard、W&B）
+# 上传模型到云端
+# 输出最后指标
                         callbacks.run('on_fit_epoch_end', list(
                             mloss) + list(results) + lr, epoch, best_fitness, fi)
 
         callbacks.run('on_train_end', last, best, epoch, results)
-
+    # 释放显存
     torch.cuda.empty_cache()
+    # 一般是 results = (P, R, mAP@0.5, mAP@0.5:0.95, val_loss_box, val_loss_obj, val_loss_cls)。
+# 返回它，方便 外部脚本调用，比如超参搜索 (evolve) 或者训练完直接打印结果。
     return results
 
 
@@ -1309,10 +1537,13 @@ def main(opt, callbacks=Callbacks()):
                     f'Usage example: $ python train.py --hyp {evolve_yaml}')
 
 
+'''===============================五、run（）函数=========================================='''
 def run(**kwargs):
     # Usage: import train; train.run(data='coco128.yaml', imgsz=320, weights='yolov5m.pt')
+    # true表示解析已知参数而不是严格解析所有参数
     opt = parse_opt(True)
     for k, v in kwargs.items():
+        # # setattr() 赋值属性，属性不存在则创建一个赋值
         setattr(opt, k, v)
     main(opt)
     return opt
