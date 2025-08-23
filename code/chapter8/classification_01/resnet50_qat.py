@@ -5,7 +5,7 @@
 @date       : 2023-02-04
 @brief      : 肺炎Xray图像分类模型，resnet50 QAT 量化
 """
-from datasets.pneumonia_dataset import PneumoniaDataset
+from code.chapter8.classification_01.datasets.pneumonia_dataset import PneumoniaDataset
 import utils.my_utils as utils
 import os
 import time
@@ -32,9 +32,9 @@ def get_args_parser(add_help=True):
         description="PyTorch Classification Training", add_help=add_help)
 
     parser.add_argument(
-        "--data-path", default=r"G:\deep_learning_data\chest_xray", type=str, help="dataset path")
+        "--data-path", default=r"bigdata/chapter-8/1/ChestXRay2017/chest_xray", type=str, help="dataset path")
     parser.add_argument(
-        "--ckpt-path", default=r"./Result/2023-09-26_01-47-40/checkpoint_best.pth", type=str, help="ckpt path")
+        "--ckpt-path", default=r"./Result/2025-08-02_22-42-38/checkpoint_best.pth", type=str, help="ckpt path")
     parser.add_argument("--model", default="resnet50", type=str,
                         help="model name; resnet50/convnext/convnext-tiny")
     parser.add_argument("--device", default="cuda", type=str,

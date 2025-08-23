@@ -18,8 +18,7 @@ from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
 import matplotlib
-from datetime import datetime
-
+from datetime import datetime, timedelta
 matplotlib.use('Agg')
 
 
@@ -120,11 +119,11 @@ def main(args):
 
     # ------------------------------------ tep2: model ------------------------------------
     if args.model == 'resnet50':
-        model = torchvision.models.resnet50(pretrained=True)
+        model = torchvision.models.resnet50(weights=None)
     elif args.model == 'convnext':
-        model = torchvision.models.convnext_base(pretrained=True)
+        model = torchvision.models.convnext_base(weights=None)
     elif args.model == 'convnext-tiny':
-        model = torchvision.models.convnext_tiny(pretrained=True)
+        model = torchvision.models.convnext_tiny(weights=None)
     else:
         logger.error('unexpect model --> :{}'.format(args.model))
 
@@ -230,7 +229,7 @@ def main(args):
             logger.info(f'save ckpt done! best acc:{best_acc}, epoch:{epoch}')
 
     total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    total_time_str = str(timedelta(seconds=int(total_time)))
     logger.info("Training time {}".format(total_time_str))
 
 

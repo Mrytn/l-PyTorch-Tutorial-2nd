@@ -31,11 +31,17 @@ def get_args_parser(add_help=True):
 # 默认值是一个样例图像路径。
 # 类型为字符串。
     parser.add_argument(
-        "--img-path", default=r"../../../data/imgs/person15_virus_46.jpeg", type=str, help="dataset path")
+        "--img-path", default=  # r"bigdata/chapter-8/1/ChestXRay2017/chest_xray/test/NORMAL/IM-0001-0001.jpeg",
+        # r"bigdata/chapter-8/1/ChestXRay2017/chest_xray/test/PNEUMONIA/person37_virus_82.jpeg",
+        # r"bigdata/chapter-8/1/ChestXRay2017/chest_xray/test/PNEUMONIA/person78_bacteria_380.jpeg",
+        # 同一个人108两张图片不同结果
+        # r"bigdata/chapter-8/1/ChestXRay2017/chest_xray/train/PNEUMONIA/person108_virus_199.jpeg",
+        r"bigdata/chapter-8/1/ChestXRay2017/chest_xray/train/PNEUMONIA/person108_virus_201.jpeg",
+        type=str, help="dataset path")
     # --ckpt-path：模型的权重文件（checkpoint）路径。
 # 默认值指向一个已保存的模型。
     parser.add_argument(
-        "--ckpt-path", default=r"./Result/2023-02-08_16-37-24/checkpoint_best.pth", type=str, help="ckpt path")
+        "--ckpt-path", default=r"./Result/2025-08-02_22-42-38/checkpoint_best.pth", type=str, help="ckpt path")
     # --model：模型名称，支持：
 # resnet50
 # convnext
@@ -82,11 +88,11 @@ def main(args):
     # ------------------------------------ step2: model init ------------------------------------
     # 根据参数选择预训练模型
     if args.model == 'resnet50':
-        model = torchvision.models.resnet50(pretrained=True)
+        model = torchvision.models.resnet50(weights=None)
     elif args.model == 'convnext':
-        model = torchvision.models.convnext_base(pretrained=True)
+        model = torchvision.models.convnext_base(weights=None)
     elif args.model == 'convnext-tiny':
-        model = torchvision.models.convnext_tiny(pretrained=True)
+        model = torchvision.models.convnext_tiny(weights=None)
     else:
         print('unexpect model --> :{}'.format(args.model))
 
@@ -113,7 +119,7 @@ def main(args):
 
     state_dict = torch.load(args.ckpt_path)
     model_sate_dict = state_dict['model_state_dict']
-    model.load_state_dict(model_sate_dict)  # 模型参数加载
+    model.load_state_dict(model_sate_dict, strict=False)  # 模型参数加载
 
     model.to(device)
     # 设置为评估模式

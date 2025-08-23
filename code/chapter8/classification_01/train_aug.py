@@ -5,9 +5,13 @@
 @date       : 2023-02-04
 @brief      : 肺炎Xray图像分类训练脚本
 """
-import os
+from dotenv import load_dotenv
 import time
-import datetime
+from datetime import datetime, timedelta
+from code.chapter8.classification_01.datasets.pneumonia_dataset import PneumoniaDataset
+import os
+# os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
+# print("NO_ALBUMENTATIONS_UPDATE =", os.getenv("NO_ALBUMENTATIONS_UPDATE"))
 import torchvision
 import torch
 import torch.nn as nn
@@ -21,18 +25,16 @@ from torch.utils.data import DataLoader
 # 从 Albumentations 库的 PyTorch 工具模块中导入 ToTensorV2，用于将图像转换为 PyTorch 的 tensor 格式
 from albumentations.pytorch import ToTensorV2
 matplotlib.use('Agg')
-
 import utils.my_utils as utils
 # 加载和预处理肺炎图像数据
-from datasets.pneumonia_dataset import PneumoniaDataset
-
 
 def get_args_parser(add_help=True):
     import argparse
 
     parser = argparse.ArgumentParser(description="PyTorch Classification Training", add_help=add_help)
 
-    parser.add_argument("--data-path", default=r"G:\deep_learning_data\chest_xray", type=str, help="dataset path")
+    parser.add_argument(
+        "--data-path", default=r"bigdata\chapter-8\1\ChestXRay2017\chest_xray", type=str, help="dataset path")
     parser.add_argument("--model", default="resnet50", type=str, help="model name; resnet50 or convnext or convnext-tiny")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
@@ -149,11 +151,11 @@ def main(args):
 
     # ------------------------------------ tep2: model ------------------------------------
     if args.model == 'resnet50':
-        model = torchvision.models.resnet50(pretrained=True)
+        model = torchvision.models.resnet50(weights=None)
     elif args.model == 'convnext':
-        model = torchvision.models.convnext_base(pretrained=True)
+        model = torchvision.models.convnext_base(weights=None)
     elif args.model == 'convnext-tiny':
-        model = torchvision.models.convnext_tiny(pretrained=True)
+        model = torchvision.models.convnext_tiny(weights=None)
     else:
         logger.error(f'unexpect model --> :{args.model}')
     model_name = model._get_name()
@@ -278,7 +280,7 @@ def main(args):
 # datetime.timedelta(seconds=3789) 就会变成一个 表示“1小时3分钟9秒” 的对象。
 # ✅ str(...)
 # 把 timedelta 对象转为字符串，如"1:03:09"
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    total_time_str = str(timedelta(seconds=int(total_time)))
     logger.info("Training time {}".format(total_time_str))
 
 
@@ -286,10 +288,15 @@ classes = ["NORMAL", "PNEUMONIA"]
 
 
 if __name__ == "__main__":
+    # 加载 .env 文件
+    load_dotenv()
+    print("NO_ALBUMENTATIONS_UPDATE =", os.getenv("NO_ALBUMENTATIONS_UPDATE"))
     args = get_args_parser().parse_args()
     utils.setup_seed(args.random_seed)
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("开始：", datetime.now())
     main(args)
+    print("结束：", datetime.now())
 
 
 

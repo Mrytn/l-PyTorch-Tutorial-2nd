@@ -16,6 +16,8 @@ python resnet_ptq.py --mode quantize --ptq-method percentile --num-data 512
 https://docs.nvidia.com/deeplearning/tensorrt/pytorch-quantization-toolkit/docs/userguide.html
 """
 # quant_nn：量化神经网络层
+import utils.my_utils as utils
+from code.chapter8.classification_01.datasets.pneumonia_dataset import PneumoniaDataset
 from pytorch_quantization import nn as quant_nn
 # 量化模块注册
 from pytorch_quantization import quant_modules
@@ -35,8 +37,6 @@ import matplotlib
 
 matplotlib.use('Agg')
 
-import utils.my_utils as utils
-from datasets.pneumonia_dataset import PneumoniaDataset
 # PTQ（Post-Training Quantization，训练后量化
 
 def collect_stats(model, data_loader, num_batches):
@@ -127,8 +127,9 @@ def compute_amax(model, **kwargs):
 def get_args_parser(add_help=True):
     import argparse
     parser = argparse.ArgumentParser(description="PyTorch Classification Training", add_help=add_help)
-    parser.add_argument("--data-path", default=r"G:\deep_learning_data\chest_xray", type=str, help="dataset path")
-    parser.add_argument("--ckpt-path", default=r"./Result/2023-09-26_01-47-40/checkpoint_best.pth", type=str, help="ckpt path")
+    parser.add_argument(
+        "--data-path", default=r"bigdata/chapter-8/1/ChestXRay2017/chest_xray", type=str, help="dataset path")
+    parser.add_argument("--ckpt-path", default=r"./Result/2025-08-02_22-42-38/checkpoint_best.pth", type=str, help="ckpt path")
     parser.add_argument("--model", default="resnet50", type=str,
                         help="model name; resnet50/convnext/convnext-tiny")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
