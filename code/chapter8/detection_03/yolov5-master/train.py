@@ -352,6 +352,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 # 否则 → 用 range(freeze[0]) 生成序列
 # freeze = ['model.0.', 'model.1.', ...]
 # 字符串用于匹配模型层的名字（named_parameters()）
+# 举例：freeze=[10]，则 range(freeze[0]) = range(10)。
+# 即 → [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     freeze = [f'model.{x}.' for x in (freeze if len(
         freeze) > 1 else range(freeze[0]))]  # layers to freeze
     # 遍历模型参数
@@ -612,6 +614,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 best possible recall最大值1，如果bpr小于0.98，程序会根据数据集的label自动学习anchor的尺寸
                 '''
             # 先转 FP16 再回 FP32，可以减少浮点精度的累计误差（和权重初始化精度优化有关）。
+            # 一些层在半精度下可能会保留特殊值（inf/nan），先 .half() 再 .float() 会触发一次数据转换，把潜在异常值转为 float32 的正常数值。
+            # 某些 特殊层（如 BatchNorm 或 buffer）在半精度下可能存在 未初始化或未清零的值，直接 .float() 可能带来 数值不稳定。
             model.half().float()  # pre-reduce anchor precision
         # 触发 "on_pretrain_routine_end" 事件，把标签和类别名传给回调系统（可能用于日志、可视化、统计等
         callbacks.run('on_pretrain_routine_end', labels, names)
@@ -764,6 +768,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             # 全局的 batch 索引（从训练开始算的第几个 batch）。
             # 这样可以保证 warmup 是跨 epoch 连续计算的，而不是每个 epoch 重新开始
             ni = i + nb * epoch
+            # 如果 imgs 在 pinned memory（固定内存） 上，设置 non_blocking=True 可以 异步拷贝到 GPU，提高效率
             imgs = imgs.to(device, non_blocking=True).float() / \
                 255  # uint8 to float32, 0-255 to 0.0-1.0
 
@@ -852,9 +857,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
             # Backward
             # 反向传播
-            # scaler 是 torch.cuda.amp.GradScaler，用于 自动混合精度（AMP）训练
+            # scaler 是 torch.cuda.amp.GradScaler，用于自动混合精度（AMP）训练
 # scaler.scale(loss)：将 loss 放大，防止 float16 下梯度溢出
 # .backward()：计算梯度，累加到模型参数的 .grad
+# scaler.scale(loss) → 将 loss 放大一个系数（比如 2^16）
+# .backward() → 在放大后的 loss 上计算梯度
+# 这样做可以让 半精度梯度足够大，不会被截断为 0
             scaler.scale(loss).backward()
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
             # 梯度累计判断
@@ -864,10 +872,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             if ni - last_opt_step >= accumulate:
                 # 背景：在 PyTorch 的 torch.cuda.amp 混合精度训练中，梯度会被 放大（scale） 以防止 float16 下溢（梯度过小变成 0）。
                 # unscale_：把梯度从放大状态恢复，这样才能安全地进行 梯度裁剪 或其他梯度操作
+                # 将梯度恢复到原始尺度，用于裁剪或检查
                 scaler.unscale_(optimizer)  # unscale gradients
                 # 对模型参数的梯度进行 范数裁剪
                 # max_norm=10.0：梯度的 最大 L2 范数，超过这个值会按比例缩小
-                # 防止梯度爆炸（特别是 RNN 或深层网络） 保持训练稳定
+                # 不会更新参数，只是修改梯度张量的数值。防止梯度爆炸（特别是 RNN 或深层网络） 保持训练稳定
+                # scaler.step(optimizer)恢复尺寸后直接更新梯度，无法剪裁了，因为剪裁前要恢复梯度再更新梯度
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=10.0)  # clip gradients
                 '''
