@@ -512,141 +512,379 @@ def run(
                                         max_det=max_det)
 
         '''===6.5 统计真实框、预测框信息==='''
-        # Metrics
+        # Metrics、# 遍历当前 batch 中每张图像的预测结果：
+# si → 当前图片在 batch 中的索引（0 到 nb-1）。
+# pred → 当前图片经过 NMS 后的预测框 [x1, y1, x2, y2, conf, cls]。
         for si, pred in enumerate(preds):
+            # 获取当前图片的真实标注框：
+            # targets[:, 0] == si → 筛选 batch 中第 si 张图的标注。
+            # [1:] → 取 [class, x, y, w, h]（像素坐标）
             labels = targets[targets[:, 0] == si, 1:]
             # number of labels, predictions
+            # nl → 当前图片真实框数量。
+# npr →当前图片预测框数量（NMS 后）。
             nl, npr = labels.shape[0], pred.shape[0]
+            # 获取当前图片的路径和尺寸（缩放后的 shape，用于可视化或调试）
+            # paths 是一个 图片路径列表，保存了当前 batch 中所有图片的文件路径。paths = [
+            '/data/coco/images/val2017/000000000139.jpg',
+            '/data/coco/images/val2017/000000000285.jpg',
+            # paths[si]代表当前 batch 中的 第几个样本的索引
+            # Path 来自 Python 标准库 pathlib，用来把字符串路径转换成 Path 对象，方便后续操作
+            # 每张图片在加载时都会保存一个对应的 shapes 信息。
+# 它是一个二维数组或元组，记录了该图片的：
+# 原始尺寸 (h, w)
+# 缩放比例和填充信息（用于从 letterbox 输入图像还原到原图尺寸时使用）
+# 如shapes[si] = (
+#     (h0, w0),   # 图片原始高度、宽度
+#     ((ratio, ratio), (dw, dh))  # 缩放比例 & padding 偏移量
+# )
+# shapes[si][0]
+# 只取第一个部分 (h0, w0)，也就是当前图片的 原始尺寸。
             path, shape = Path(paths[si]), shapes[si][0]
+            # 初始化布尔张量 correct：用于标记每个预测框在不同 IoU 阈值下是否匹配真实框。
+# 形状 (npr, niou)：
+# npr → 当前图片预测框数
+# niou → IoU 阈值数量（如 [0.5,0.55,...,0.95]，共 10 个）
+# 初始值都是 False（还没匹配）
             correct = torch.zeros(
                 npr, niou, dtype=torch.bool, device=device)  # init
+            # 累计处理过的图片数量
             seen += 1
-
+            # 如果 预测框为 0（模型没有预测任何目标）
             if npr == 0:
+                # 如果真实框数量 nl>0
                 if nl:
+                    # 在 stats 中追加一条记录，表示这张图片的预测为空：
+                    # correct → 所有预测都为 False
+                    # torch.zeros((2, 0)) → 占位，表示置信度和预测类别为空
+                    # labels[:, 0] → 真实类别
                     stats.append(
                         (correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
                     if plots:
+                        # 如果绘制混淆矩阵 (plots=True)，也会更新：
+                        # 调用 confusion_matrix.process_batch()，没有检测框（detections=None），只提供真实类别
                         confusion_matrix.process_batch(
                             detections=None, labels=labels[:, 0])
                 continue
 
             # Predictions
             if single_cls:
+                # 如果你只训练/推理 单类别检测，就把所有预测框的类别 class_id 强制设为 0。
                 pred[:, 5] = 0
+            # 复制一份预测结果，避免后续修改 pred 本身。
             predn = pred.clone()
+            # im[si].shape[1:]im[si] 是 dataloader 给模型的输入图片（通常是 缩放+padding 之后的 letterbox 图像）。
+# .shape 返回 (height, width, channels)（如果是 numpy）或者 (channels, height, width)（如果是 tensor）。
+# .shape[1:] 取的是 (height, width)，代表当前推理图像的大小。
+# predn[:, :4]
+# 取预测框的前四列 [x1, y1, x2, y2]，即边界框坐标。
+# 注意这些坐标还是在 推理图像空间（可能被缩放过）。
+# shape
+# 原始图像的 (height, width)。
+# 这是 dataloader 在读取图片时保存的，用来做坐标还原。
+# shapes[si][1]
+# shapes 里保存了 letterbox 时的缩放比例和 padding 信息。
+# shapes[si] = (original_shape, (ratio, pad))，其中：
+# ratio：输入图像相对原始图像的缩放因子。
+# pad：上下/左右的填充像素。
+# shapes[si][1] 就是 (ratio, pad)，用于把预测框从 letterbox 坐标映射回原图。
             scale_boxes(im[si].shape[1:], predn[:, :4], shape,
                         shapes[si][1])  # native-space pred
 
             # Evaluate
+            # 把标签和预测框处理成统一格式，然后送入 process_batch 去算 mAP 等指标
+            # 标签数量存在
             if nl:
-                tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+
+                # labels[:, 1:5] 取出 [x, y, w, h] 部分。
+                # xywh2xyxy 转成[x1, y1, x2, y2](左上角和右下角)，这样才能和预测框统一比较。
+                tbox = xywh2xyxy(labels[:, 1:5])  # type: ignore # target boxes
+                # 把标签框 tbox 从网络输入尺寸 (640×640) 映射回 原图尺寸，保证和 predn（预测框映射回原图后的结果）在同一坐标系。
+                # labels[:, 0:1]：类别 ID。
+# tbox：现在已经是 原图空间的 xyxy 坐标。
+# 拼接后 labelsn 变成 [cls, x1, y1, x2, y2]
                 scale_boxes(im[si].shape[1:], tbox, shape,
                             shapes[si][1])  # native-space labels
                 # native-space labels
+                # labels[:, 0:1]：类别 ID。
+# tbox：现在已经是 原图空间的 xyxy 坐标。
+# 拼接后 labelsn 变成 [cls, x1, y1, x2, y2]。
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)
+                # predn：预测框 [x1, y1, x2, y2, conf, cls]，同样是在原图空间。
+# labelsn：目标框 [cls, x1, y1, x2, y2]。
+# iouv：IoU 阈值列表 (例如 [0.5, 0.55, …, 0.95])。
+# process_batch 负责算：预测框和标签框的匹配关系（是否 TP / FP），返回布尔矩阵 correct。
                 correct = process_batch(predn, labelsn, iouv)
                 if plots:
+                    # 更新混淆矩阵
                     confusion_matrix.process_batch(predn, labelsn)
             # (correct, conf, pcls, tcls)
+            # correct：每个预测框在不同 IoU 阈值下是否匹配成功 (TP / FP)。
+# pred[:, 4]：预测框的置信度 (confidence)。
+# pred[:, 5]：预测框的类别 ID。
+# labels[:, 0]：真实框的类别 ID。
+# 这些信息被存到 stats 里，最后用来计算 P, R, mAP 等指标
             stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))
 
             # Save/log
             if save_txt:
+                # 保存预测信息到txt文件
                 save_one_txt(predn, save_conf, shape,
                              file=save_dir / 'labels' / f'{path.stem}.txt')
             if save_json:
                 # append to COCO-JSON dictionary
+                # 保存预测信息到json字典
                 save_one_json(predn, jdict, path, class_map)
+            # YOLOv5 在 val 过程中提供了 callback 钩子，方便外部插件或自定义逻辑在每张验证图像结束时执行。
             callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
 
+        '''===6.6 画出前三个batch图片的gt和pred框==='''
         # Plot images
         if plots and batch_i < 3:
+            # plot_images：会把图片拼接成一个大图，并在图上绘制框\
+            # 展示真实标签
             plot_images(im, targets, paths, save_dir /
                         f'val_batch{batch_i}_labels.jpg', names)  # labels
+            # output_to_target(preds) 的作用是把 preds 转换为targets 格式一致
+            # 展示预测框 (preds，先转成 target 格式)
             plot_images(im, output_to_target(preds), paths, save_dir /
                         f'val_batch{batch_i}_pred.jpg', names)  # pred
-
+        # on_val_batch_end 表示 每个验证 batch 结束时触发
         callbacks.run('on_val_batch_end', batch_i, im,
                       targets, paths, shapes, preds)
 
+    '''===6.7 计算指标==='''
     # Compute metrics
+    # stats 是一个 list of tuples，每个 tuple 对应一个 batch，包含
+    # correct: TP/FP 布尔矩阵
+# pred[:,4]: 置信度
+# pred[:,5]: 预测类别
+# labels[:,0]: 真实类别
+# zip(*stats)：把每个 batch 的同类数据分组，例如把所有 batch 的 correct 聚在一起
+# torch.cat(x, 0)：按第 0 维拼接成一个大 tensor
+# .cpu().numpy()：转成 numpy 数组方便后续计算
+# stats[0] = all_correct
+# stats[1] = all_conf
+# stats[2] = all_pred_cls
+# stats[3] = all_true_cls
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
+    # 确保验证集里至少有一个预测框，否则跳过指标计算
     if len(stats) and stats[0].any():
+        # ap_per_class 核心逻辑：
+        # 按 置信度排序预测框
+        # 逐个预测框匹配真实框，计算 TP/FP
+        # 计算 Precision（P）和 Recall（R）
+        # 画 PR 曲线
+        # 积分得到 AP@0.5 和 AP@0.5:0.95
+        # 返回每个类别的指标：
+        # tp, fp：每个预测框对应的 TP/FP
+        # p, r：每类 Precision/Recall
+        # f1：每类 F1 分数
+        # ap：每类 AP（多 IoU 阈值平均）
+        # ap_class：类别 ID
         tp, fp, p, r, f1, ap, ap_class = ap_per_class(
             *stats, plot=plots, save_dir=save_dir, names=names)
+        # ap 形状 [num_classes, num_iou_thresholds]
+# ap[:,0] → IoU=0.5 时的 AP（AP@0.5）
+# ap.mean(1) → 对 0.5~0.95 IoU 平均（AP@0.5:0.95）
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+#         mp → 平均 Precision（所有类别）
+# mr → 平均 Recall
+# map50 → 所有类别的 AP@0.5 平均
+# map → 所有类别的 AP@0.5:0.95 平均
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
     # number of targets per class
+    # stats[3] = 所有真实标签的类别 ID
+# np.bincount(..., minlength=nc) → 返回一个长度为 nc 的数组，每个元素是该类别真实目标数
+# 用于在报告里显示每个类别有多少目标。
     nt = np.bincount(stats[3].astype(int), minlength=nc)
 
+    '''===6.8 打印日志==='''
     # Print results
+    # '%22s' → 占 22 个字符打印字符串（这里用于类名或 'all'）
+# '%11i' * 2 → 两个整数，每个占 11 个字符
+# '%11.3g' * 4 → 四个浮点数，每个占 11 个字符，保留 3 位有效数字
+# 最终格式对应打印列
+# Class | Images | Instances | P | R | mAP50 | mAP50-95
     pf = '%22s' + '%11i' * 2 + '%11.3g' * 4  # print format
+    # 打印整体指标
+    # 'all' → 表示统计所有类别的总体指标
+# seen → 遍历过的图片数量
+# nt.sum() → 验证集总目标数（所有类别加起来）
+# mp → 平均 Precision
+# mr → 平均 Recall
+# map50 → mAP@0.5
+# map → mAP@0.5:0.95
+# ⚡ 作用：把验证集的整体性能指标输出到日志
     LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
     if nt.sum() == 0:
+        # 如果验证集中没有真实标签 (nt.sum() == 0)：
+        # mAP / P / R 不能计算
+        # 输出警告，提醒用户数据集可能配置错误或为空
         LOGGER.warning(
             f'WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels')
 
     # Print results per class
+    # 打印每类指标
+    # verbose → 用户指定详细输出
+# nc < 50 and not training → 如果类别数少于 50 且是验证/测试模式，也打印每类指标
+# nc > 1 → 确保有多类别
+# len(stats) → 统计信息存在
     if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
+        # 遍历每个有 AP 的类别 ap_class
+        # names[c] → 类别名称
+        # seen → 图片总数
+        # nt[c] → 该类别真实目标数量
+        # p[i], r[i], ap50[i], ap[i] → 该类别的精度、召回率、mAP@0.5、mAP@0.5:0.95
         for i, c in enumerate(ap_class):
             LOGGER.info(pf % (names[c], seen, nt[c],
                         p[i], r[i], ap50[i], ap[i]))
 
     # Print speeds
+    # 打印速度信息
+    # dt 是三个 Profile 对象：
+# dt[0] → 数据预处理耗时
+# dt[1] → 推理耗时（模型 forward）
+# dt[2] → NMS 耗时
+# x.t / seen * 1E3 → 每张图的平均耗时（ms）
     t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
     if not training:
         shape = (batch_size, 3, imgsz, imgsz)
+        # 输出示例：Speed: 3.2ms pre-process, 12.5ms inference, 1.1ms NMS per image at shape (16, 3, 640, 640)
+
         LOGGER.info(
             f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {shape}' % t)
 
+    '''===6.9 保存验证结果==='''
     # Plots
     if plots:
+        # 绘制混淆矩阵
+        #         # confusion_matrix → 在每个 batch 处理预测时已经累积了 TP/FP/类别匹配信息
+        # plot(save_dir, names)：
+        # 绘制混淆矩阵（类别预测 vs 真实标签）
+        # 横轴：预测类别
+        # 纵轴：真实类别
+        # 颜色深浅表示数量多少
+        # 保存路径：save_dir/confusion_matrix.png
         confusion_matrix.plot(save_dir=save_dir, names=list(names.values()))
+        # 触发验证结束回调
         callbacks.run('on_val_end', nt, tp, fp, p, r, f1,
                       ap, ap50, ap_class, confusion_matrix)
 
     # Save JSON
+    # save_json=True → 用户希望把预测结果保存为 COCO 格式 JSON
+# len(jdict) → jdict 不为空，即有预测结果
     if save_json and len(jdict):
+        # weights 可能是列表或单个文件
+        # Path(...).stem → 取文件名（不含路径和扩展名）
+        # 用于生成预测 JSON 文件名
+        # 验证时，通常只需要 一组权重生成一份预测 JSON，用于计算 mAP
+        # 如果有多个权重：
+        # 可以逐个权重跑一次验证
+        # 每次生成独立的 JSON 文件
+        # 所以这里默认取第一个权重文件作为输出文件名（best_predictions.json），避免覆盖或混乱
         w = Path(weights[0] if isinstance(
             weights, list) else weights).stem if weights is not None else ''  # weights
         # annotations
+        # COCO 数据集标注路径
+        # 指向 COCO 验证集的 真实标注文件
+# pycocotools 用它来计算 mAP
         anno_json = str(
             Path('../datasets/coco/annotations/instances_val2017.json'))
+        # 保存预测结果的 JSON 文件路径
+        # JSON 格式是 COCO 风格：[{"image_id": 1, "category_id": 3, "bbox": [x, y, w, h], "score": 0.987}, ...]
         pred_json = str(save_dir / f'{w}_predictions.json')  # predictions
+        # 提示用户正在使用 pycocotools 计算 mAP
+# 并且会把预测结果保存到 pred_json
         LOGGER.info(f'\nEvaluating pycocotools mAP... saving {pred_json}...')
+        '''用 pycocotools 官方评估 COCO mAP 的部分，它和 YOLOv5 内部自己算的 ap_per_class() 是两套平行的指标计算方式'''
+        # 保存预测结果
+        # jdict 前面已经收集了所有图片的预测框（转成 COCO JSON 格式），比如：[
+#   {"image_id": 42, "category_id": 1, "bbox": [x, y, w, h], "score": 0.98},
+#   {"image_id": 42, "category_id": 3, "bbox": [x, y, w, h], "score": 0.85},
+#   ...
+# ]这里把它写入 pred_json 文件，后续交给 pycocotools 来评估。
         with open(pred_json, 'w') as f:
             json.dump(jdict, f)
 
         try:  # https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocoEvalDemo.ipynb
+            # 加载 COCO API
+            # 确认 pycocotools 已安装
+            # COCO 是官方的标注数据加载类
+            # COCOeval 是官方的评估类，用来计算 mAP、Recall 等指标
             check_requirements('pycocotools>=2.0.6')
             from pycocotools.coco import COCO
             from pycocotools.cocoeval import COCOeval
-
+            # 初始化标注和预测
+            # 加载真值标注 (比如 COCO val2017.json)
+            # anno_json 指向真实的标注文件
             anno = COCO(anno_json)  # init annotations api
+            # 加载刚保存的预测 JSON
+            # pred_json 是我们刚生成的预测结果
             pred = anno.loadRes(pred_json)  # init predictions api
+            # 设定评估参数
+            # COCOeval 第三个参数 'bbox' 表示评估 目标检测框（还可以评估 segmentation、keypoints 等）
             eval = COCOeval(anno, pred, 'bbox')
             if is_coco:
                 # image IDs to evaluate
+                # dataloader.dataset 表示它所加载的数据集对象。
+                # im_files 是这个数据集中存储的 图片文件路径列表
+                # 把文件名（不带扩展名的部分）转换成整数。
+                # 比如 '000001' → 1，'000123' → 123。
+                # iouType 可选值
+                # 'segm' → 评估 实例分割 (segmentation masks)
+                # 'bbox' → 评估 目标检测框 (bounding boxes)
+                # 'keypoints' → 评估 关键点检测 (human pose / landmark keypoints)
                 eval.params.imgIds = [int(Path(x).stem)
                                       for x in dataloader.dataset.im_files]
+            # 执行评估
+            #  匹配预测框和真值框
             eval.evaluate()
+            # 累积各 IoU 阈值下的结果
             eval.accumulate()
+            # 打印最终 mAP/Recall 等指标
+            # 这里会打印标准的 12 个指标，比如
+            # Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.365
+# Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = 0.593
             eval.summarize()
             # update results (mAP@0.5:0.95, mAP@0.5)
+            # eval.stats 是 pycocotools 计算的指标数组
+# eval.stats[0] = mAP@0.5:0.95
+# eval.stats[1] = mAP@0.5
+# 赋值给 YOLOv5 内部变量，和之前 ap_per_class() 结果对齐
             map, map50 = eval.stats[:2]
+        # 异常处理
         except Exception as e:
+            # 如果用户没装 pycocotools，或者数据集不是 COCO 格式，就会报错，这里直接忽略。
             LOGGER.info(f'pycocotools unable to run: {e}')
 
+    '''===6.10 返回结果==='''
     # Return results
+    #  将模型转换为适用于训练的状态
     model.float()  # for training
     if not training:
+        #  如果不是训练过程则将结果保存到对应的路径
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
+        # 在控制台中打印保存结果
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
+    # 初始化一个长度为类别数的数组，默认都填充 map（整体 mAP）
     maps = np.zeros(nc) + map
+    # ap_class：哪些类别在验证集中实际出现过。
+# ap[i]：类别 c 的 AP 值。
+# 所以这一步会用 各类别 AP 覆盖 maps，保证 maps[c] 代表类别 c 的 AP，其余类别还是整体 mAP
     for i, c in enumerate(ap_class):
         maps[c] = ap[i]
+    # mp：mean precision
+# mr：mean recall
+# map50：mAP@0.5
+# map：mAP@0.5:0.95
+# loss：验证集上的平均 loss
+# maps：每个类别的 AP 数组（长度 = nc）
+# t：计时信息（数据时间、推理时间、NMS 时间等）
     return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
+
+
+'''===============================================五、设置opt参数==================================================='''
 
 
 def parse_opt():
@@ -665,6 +903,7 @@ def parse_opt():
                         default=0.6, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=300,
                         help='maximum detections per image')
+    # 设置测试的类型 有train, val, test, speed or study几种 默认val
     parser.add_argument('--task', default='val',
                         help='train, val, test, speed or study')
     parser.add_argument('--device', default='',
@@ -675,43 +914,61 @@ def parse_opt():
                         help='treat as single-class dataset')
     parser.add_argument('--augment', action='store_true',
                         help='augmented inference')
+    # 是否打印出每个类别的mAP 默认False
     parser.add_argument('--verbose', action='store_true',
                         help='report mAP by class')
+    # 是否以txt文件的形式保存模型预测的框坐标, 默认False
     parser.add_argument('--save-txt', action='store_true',
                         help='save results to *.txt')
+    # 保存label+prediction杂交结果到对应.txt，默认False
     parser.add_argument('--save-hybrid', action='store_true',
                         help='save label+prediction hybrid results to *.txt')
+    # 保存置信度
     parser.add_argument('--save-conf', action='store_true',
                         help='save confidences in --save-txt labels')
+    # 是否按照coco的json格式保存预测框，并且使用cocoapi做评估（需要同样coco的json格式的标签） 默认Fals
     parser.add_argument('--save-json', action='store_true',
                         help='save a COCO-JSON results file')
+    # 测试保存的源文件 默认runs/val
     parser.add_argument('--project', default=ROOT /
                         'runs/val', help='save to project/name')
+    # 测试保存的文件地址 默认exp  保存在runs/val/exp下
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true',
                         help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true',
                         help='use FP16 half-precision inference')
+    # 是否使用 OpenCV DNN对ONNX 模型推理
     parser.add_argument('--dnn', action='store_true',
                         help='use OpenCV DNN for ONNX inference')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
+    # |或 左右两个变量有一个为True 左边变量就为True
     opt.save_json |= opt.data.endswith('coco.yaml')
     opt.save_txt |= opt.save_hybrid
     print_args(vars(opt))
     return opt
 
 
+'''==============================六、执行main（）函数======================================'''
 def main(opt):
+    # 检查运行 YOLOv5 所需的 Python 库是否齐全
+    # 检查环境依赖，排除 tensorboard 和 thop
     check_requirements(exclude=('tensorboard', 'thop'))
-
+    # 如果任务是训练、验证、测试
     if opt.task in ('train', 'val', 'test'):  # run normally
+        # 1. 提醒置信度阈值过高的问题
+        # 官方经验是：在验证/测试时，conf_thres 必须设置得很低（≤0.001），否则 mAP 结果会不准确（因为很多低置信度框没算进去）
         if opt.conf_thres > 0.001:  # https://github.com/ultralytics/yolov5/issues/1466
             LOGGER.info(
                 f'WARNING ⚠️ confidence threshold {opt.conf_thres} > 0.001 produces invalid results')
+        # 2. 提醒保存混合标签会导致 mAP 虚高
+        # --save-hybrid 参数会把 预测框和 GT 标签混合在一起保存，主要用于半监督学习。
+# 但如果用它来验证，会导致 mAP 人为升高，所以这里有个警告
         if opt.save_hybrid:
             LOGGER.info(
                 'WARNING ⚠️ --save-hybrid will return high mAP from hybrid labels, not from predictions alone')
+        # 3. 调用 run(**vars(opt)) 进入具体任务逻辑
         run(**vars(opt))
 
     else:
