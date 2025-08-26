@@ -20,6 +20,7 @@ Usage - formats:
 """
 
 '''============1.导入安装好的python库=========='''
+from utils.dataloaders import create_classification_dataloader
 from utils.torch_utils import select_device, smart_inference_mode
 import json # 实现字典列表和JSON字符串之间的相互解析
 from utils.dataloaders import create_dataloader
@@ -161,7 +162,7 @@ def process_batch(detections, labels, iouv):
         # x[0] 是 ground truth 的索引数组，x[0].shape[0] 就是匹配的数量。
 # 如果有匹配（数量 > 0），才继续执行
         if x[0].shape[0]:
-            # torch.stack(x, 1) 按第列堆叠
+            # torch.stack(x, 1) 按列堆叠
             # x[0] → 真实框索引 [num_matches]
             # x[1] → 预测框索引 [num_matches]得到 [匹配的真实框id, 预测框id]
             # iou 是一个 IoU 矩阵，形状是 [num_gts, num_preds]。
@@ -180,6 +181,7 @@ def process_batch(detections, labels, iouv):
                 # 每个预测框只保留 IoU 最大的
                 # 目的：一对一匹配
                 # 预测框唯一
+                # 第二处的1因为取的是下表2,0会取真实值
                 matches = matches[np.unique(
                     matches[:, 1], return_index=True)[1]]
                 # matches = matches[matches[:, 2].argsort()[::-1]]
@@ -206,7 +208,7 @@ def run(
         imgsz=640,  # inference size (pixels)
         conf_thres=0.001,  # confidence threshold# object置信度阈值 默认0.001
         iou_thres=0.6,  # NMS IoU threshold进行NMS时IOU的阈值 默认0.6
-        max_det=300,  # maximum detections per image
+        max_det=300,  # maximum detections per image最大预测框个数
         task='val',  # train, val, test, speed or study设置测试的类型 有train, val, test, speed or study几种 默认val
         device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
         workers=8,  # max dataloader workers (per RANK in DDP mode)
@@ -428,7 +430,7 @@ def run(
 # desc=s：进度条前面会显示表头。
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
     '''===6.1 开始验证前的预处理==='''
-    # 遍历验证集 DataLoader：
+    # 遍历验证集 DataLoader：6
 # batch_i：当前 batch 的索引（从 0 开始）。
 # im：图片张量，形状 (batch_size, 3, H, W)。
 # targets：真实标注框，格式是 [image_index, class, x, y, w, h]（相对坐标）。
@@ -466,6 +468,9 @@ def run(
             # preds = model(im, augment=augment)
             # （这里可能带 测试时增强 (TTA)：翻转、缩放等数据增强后再推理，最后融合结果。）
             # train_out = None（因为不需要 loss）
+            # model(im) 在训练模式下（model.train() 或 model.eval() + compute_loss=True）返回的是 一个二元组：
+            # preds → 解码后的预测框（置信度、类别、坐标）
+            # train_out → 网络原始输出（如 P3、P4、P5 特征层卷积输出），用于计算 loss
             preds, train_out = model(im) if compute_loss else (
                 model(im, augment=augment), None)
 
@@ -878,7 +883,7 @@ def run(
 # mr：mean recall
 # map50：mAP@0.5
 # map：mAP@0.5:0.95
-# loss：验证集上的平均 loss
+# loss：验证集上的平均 loss（*(loss.cpu() / len(dataloader)).tolist() → 验证集的平均损失（一般是分类损失、定位损失、置信度损失））
 # maps：每个类别的 AP 数组（长度 = nc）
 # t：计时信息（数据时间、推理时间、NMS 时间等）
     return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
@@ -951,6 +956,8 @@ def parse_opt():
 
 
 '''==============================六、执行main（）函数======================================'''
+
+
 def main(opt):
     # 检查运行 YOLOv5 所需的 Python 库是否齐全
     # 检查环境依赖，排除 tensorboard 和 thop
@@ -972,31 +979,59 @@ def main(opt):
         run(**vars(opt))
 
     else:
+        # 用户可能输入一个权重：--weights yolov5s.pt
+        # 也可能输入多个：--weights yolov5n.pt yolov5s.pt
+        # 这里统一把它转成 list，这样后面就可以用 for 循环来依次验证多个模型。
         weights = opt.weights if isinstance(
             opt.weights, list) else [opt.weights]
         # FP16 for fastest results
+        # 如果有 CUDA 并且设备不是 CPU，就默认用 FP16（半精度），能加速推理。
         opt.half = torch.cuda.is_available() and opt.device != 'cpu'
+        # 测速度时
         if opt.task == 'speed':  # speed benchmarks
             # python val.py --task speed --data coco.yaml --batch 1 --weights yolov5n.pt yolov5s.pt...
+            # opt.conf_thres、opt.iou_thres、opt.save_json 被设为默认值（速度测试时不需要保存结果）。
+            # 然后用 for 遍历所有权重，每个模型都调用一次 run(...) 进行测速
             opt.conf_thres, opt.iou_thres, opt.save_json = 0.25, 0.45, False
             for opt.weights in weights:
                 run(**vars(opt), plots=False)
-
+        # 多模型尺寸对比测试时
+        # 会同时对 yolov5n.pt、yolov5s.pt 等多个模型，在不同输入尺寸下进行验证，绘制速度 vs mAP 曲线
         elif opt.task == 'study':  # speed vs mAP benchmarks
-            # python val.py --task study --data coco.yaml --iou 0.7 --weights yolov5n.pt yolov5s.pt...
+            # python val.py --task study --data coco.yaml --iou 0.7 --weights yolov5n.pt yolov5s.pt..
+            # 遍历每个权重。
+            # f 是保存结果的文件名，比如：.study_coco_yolov5n.txt study_coco_yolov5s.txt
             for opt.weights in weights:
                 # filename to save to
                 f = f'study_{Path(opt.data).stem}_{Path(opt.weights).stem}.txt'
                 # x axis (image sizes), y axis
+                # x：输入图片尺寸的列表，从 256 到 1536，每次步长 128，即 [256, 384, 512, ..., 1536]。
+# y：用来存放每个输入尺寸下的结果
                 x, y = list(range(256, 1536 + 128, 128)), []
+                # 遍历 x 里的每一个元素；
+# 每次循环时，把当前元素的值赋给 opt 对象的 imgsz 属性；
+# 循环体内部就可以通过 opt.imgsz 来使用这个值。
                 for opt.imgsz in x:  # img-size
                     LOGGER.info(f'\nRunning {f} --imgsz {opt.imgsz}...')
+                    # 遍历每一个输入尺寸 imgsz，调用一次 run(...)。
+                    # r：精度指标（mp, mr, map50, map）
+# _：类别相关的 map（没用到这里）
+# t：推理速度指标（preprocess, inference, NMS 时间）
+# 把结果拼起来 r + t，存到 y 中
                     r, _, t = run(**vars(opt), plots=False)
                     y.append(r + t)  # results and times
+                # 每个模型的结果保存到一个 .txt 文件里。
+# 文件内容大概是多行，每行对应一个 imgsz 的结果和速度。
+# 10：总宽度为 10 个字符，不够会在前面补空格。
+# .4：保留 4 位有效数字（注意不是小数点后 4 位，而是有效位数）。
+# g：使用浮点数的通用格式（在定点表示和科学计数法之间自动切换，取更简洁的
                 np.savetxt(f, y, fmt='%10.4g')  # save
+            # 把所有结果 .txt 文件打包成一个 study.zip。
             subprocess.run(['zip', '-r', 'study.zip', 'study_*.txt'])
+# 调用 plot_val_study(x=x) 绘制出速度 vs mAP 的对比曲线
             plot_val_study(x=x)  # plot
         else:
+            # 其他类型报异常
             raise NotImplementedError(
                 f'--task {opt.task} not in ("train", "val", "test", "speed", "study")')
 
