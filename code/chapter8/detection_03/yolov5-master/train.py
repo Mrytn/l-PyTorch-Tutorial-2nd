@@ -22,27 +22,11 @@ Usage:
     训练数据为coco128 coco128数据集中有128张图片 80个类别，是规模较小的数据集
 """
 '''======================1.导入安装好的python库====================='''
+
 from torch.optim import lr_scheduler
 import os
 from tqdm import tqdm
-import val as validate  # for end-of-epoch mAP
-from models.experimental import attempt_load
-from models.yolo import Model
-from utils.autoanchor import check_anchors
-from utils.autobatch import check_train_batch_size
-from utils.callbacks import Callbacks
-from utils.dataloaders import create_dataloader
-from utils.downloads import attempt_download, is_url
-from utils.general import (LOGGER, TQDM_BAR_FORMAT, check_amp, check_dataset, check_file, check_git_info,
-                           check_git_status, check_img_size, check_requirements, check_suffix, check_yaml, colorstr,
-                           get_latest_run, increment_path, init_seeds, intersect_dicts, labels_to_class_weights,
-                           labels_to_image_weights, methods, one_cycle, print_args, print_mutation, strip_optimizer,
-                           yaml_save)
-from utils.loggers import Loggers
-from utils.loggers.comet.comet_utils import check_comet_resume
-from utils.loss import ComputeLoss
-from utils.plots import plot_evolve
-from utils.metrics import fitness
+
 import time
 import sys
 from copy import deepcopy   # 深度拷贝模块
@@ -79,7 +63,61 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 # 模型验证指标，包括ap，混淆矩阵等
 # 定义了Annotator类，可以在图像上绘制矩形框和标注信息
 # 定义了一些与PyTorch有关的工具函数，比如选择设备、同步时间等
-
+import val as validate  # for end-of-epoch mAP
+from models.experimental import attempt_load
+from models.yolo import Model
+from utils.autoanchor import check_anchors
+from utils.autobatch import check_train_batch_size
+from utils.callbacks import Callbacks
+from utils.dataloaders import create_dataloader
+from utils.downloads import attempt_download, is_url
+from utils.general import (LOGGER, TQDM_BAR_FORMAT, check_amp, check_dataset, check_file, check_git_info,
+                           check_git_status, check_img_size, check_requirements, check_suffix, check_yaml, colorstr,
+                           get_latest_run, increment_path, init_seeds, intersect_dicts, labels_to_class_weights,
+                           labels_to_image_weights, methods, one_cycle, print_args, print_mutation, strip_optimizer,
+                           yaml_save)
+from utils.loggers import Loggers
+from utils.loggers.comet.comet_utils import check_comet_resume
+from utils.loss import ComputeLoss
+from utils.plots import plot_evolve
+from utils.metrics import fitness
+from utils.torch_utils import (
+    EarlyStopping,
+    ModelEMA,
+    de_parallel,
+    select_device,
+    smart_DDP,
+    smart_optimizer,
+    smart_resume,
+    torch_distributed_zero_first,
+)
+from utils.loggers import LOGGERS, Loggers
+from utils.general import (
+    LOGGER,
+    TQDM_BAR_FORMAT,
+    check_amp,
+    check_dataset,
+    check_file,
+    check_git_info,
+    check_git_status,
+    check_img_size,
+    check_requirements,
+    check_suffix,
+    check_yaml,
+    colorstr,
+    get_latest_run,
+    increment_path,
+    init_seeds,
+    intersect_dicts,
+    labels_to_class_weights,
+    labels_to_image_weights,
+    methods,
+    one_cycle,
+    print_args,
+    print_mutation,
+    strip_optimizer,
+    yaml_save,
+)
 '''================4.分布式训练初始化==========================='''
 # LOCAL_RANK：用于指定 当前进程在当前机器上的 GPU 编号
 # https://pytorch.org/docs/stable/elastic/run.html

@@ -28,12 +28,7 @@ Usage - formats:
                                  yolov5s_paddle_model       # PaddlePaddle
 """
 
-from utils.torch_utils import select_device, smart_inference_mode
-from utils.plots import Annotator, colors, save_one_box
-from utils.general import (LOGGER, Profile, check_file, check_img_size, check_imshow, check_requirements, colorstr, cv2,
-                           increment_path, non_max_suppression, print_args, scale_boxes, strip_optimizer, xyxy2xywh)
-from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
-from models.common import DetectMultiBackend
+
 import argparse
 import os
 import platform
@@ -53,6 +48,13 @@ if str(ROOT) not in sys.path:
 # 将 ROOT 转换为相对于当前工作目录（Path.cwd()）的相对路径，然后再转成一个 Path 对象。
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
+'''=====================3..加载自定义模块============================='''
+from utils.torch_utils import select_device, smart_inference_mode
+from utils.plots import Annotator, colors, save_one_box
+from utils.general import (LOGGER, Profile, check_file, check_img_size, check_imshow, check_requirements, colorstr, cv2,
+                           increment_path, non_max_suppression, print_args, scale_boxes, strip_optimizer, xyxy2xywh)
+from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
+from models.common import DetectMultiBackend
 # 在推理时关闭梯度计算，节省显存、加快速度；但在训练时保留梯度
 @smart_inference_mode()
 # ---------1.载入参数---------

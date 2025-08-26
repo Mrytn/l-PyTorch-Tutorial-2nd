@@ -5,31 +5,42 @@ YOLO-specific modules
 Usage:
     $ python models/yolo.py --cfg yolov5s.yaml
 """
-
-import argparse
+'''======================1.导入安装好的python库====================='''
 import contextlib
-import os
+import argparse
+from copy import deepcopy # 数据拷贝模块 深拷贝
+from pathlib import Path
 import platform
 import sys
-from copy import deepcopy
-from pathlib import Path
+import os
 
+
+'''===================2.获取当前文件的绝对路径========================'''
 FILE = Path(__file__).resolve()
+# parents[1] 表示 yolo.py 文件的 上上级目录（因为 YOLOv5 项目一般是 yolov5/models/yolo.py，往上两层就到了 yolov5/ 项目根目录）
+# 要用项目里的其他模块代码，都必须要先把项目根目录加到sys.path,且在其他模块导入前加
 ROOT = FILE.parents[1]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 if platform.system() != 'Windows':
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
-
+'''===================3..加载自定义模块============================'''
+# yolov5的网络结构(yolov5)
 from models.common import *
+# 导入在线下载模块
 from models.experimental import *
+# 导入检查anchors合法性的函数
 from utils.autoanchor import check_anchor_order
+# 定义了一些常用的工具函数
 from utils.general import LOGGER, check_version, check_yaml, make_divisible, print_args
+# 定义了Annotator类，可以在图像上绘制矩形框和标注信息
 from utils.plots import feature_visualization
+# 定义了一些与PyTorch有关的工具函数
 from utils.torch_utils import (fuse_conv_and_bn, initialize_weights, model_info, profile, scale_img, select_device,
                                time_sync)
 
 try:
+    # thop 是一个用于 计算神经网络 FLOPs（浮点运算次数）和参数量 的库
     import thop  # for FLOPs computation
 except ImportError:
     thop = None
@@ -297,6 +308,7 @@ class ClassificationModel(BaseModel):
 
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
+    '''===================1. 获取对应参数============================'''
     # Parse a YOLOv5 model.yaml dictionary
     LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
     anchors, nc, gd, gw, act = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple'], d.get('activation')

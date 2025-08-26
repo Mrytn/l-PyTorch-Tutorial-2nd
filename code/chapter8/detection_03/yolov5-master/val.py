@@ -20,19 +20,14 @@ Usage - formats:
 """
 
 '''============1.导入安装好的python库=========='''
-from utils.dataloaders import create_classification_dataloader
-from utils.torch_utils import select_device, smart_inference_mode
+
 import json # 实现字典列表和JSON字符串之间的相互解析
-from utils.dataloaders import create_dataloader
-from utils.callbacks import Callbacks
-from models.common import DetectMultiBackend
+
 from tqdm import tqdm
 import torch
 import numpy as np
 from pathlib import Path
 import sys
-from utils.plots import output_to_target, plot_images, plot_val_study
-from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
 from threading import Thread # python中处理多线程的库
 import argparse
 import os
@@ -50,13 +45,22 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 '''===================3..加载自定义模块============================'''
 # yolov5的网络结构(yolov5)
-# 和日志相关的回调函数
+from models.common import DetectMultiBackend
 # 加载数据集的函数
+from utils.dataloaders import create_dataloader
+# 和日志相关的回调函数
+from utils.callbacks import Callbacks
+from utils.dataloaders import create_classification_dataloader
 #  定义了一些常用的工具函数
-# 在YOLOv5中，fitness函数实现对 [P, R, mAP@.5, mAP@.5-.95] 指标进行加权
+from utils.torch_utils import select_device, smart_inference_mode
 # # 定义了Annotator类，可以在图像上绘制矩形框和标注信息
-# 定义了一些与PyTorch有关的工具函数
+from utils.plots import output_to_target, plot_images, plot_val_study
+# 在YOLOv5中，fitness函数实现对 [P, R, mAP@.5, mAP@.5-.95] 指标进行加权
+from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
 
+from utils.general import (LOGGER, NCOLS, box_iou, check_dataset, check_img_size, check_requirements, check_yaml,
+                           coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
+                           scale_coords, xywh2xyxy, xyxy2xywh)  # 定义了一些常用的工具函数
 '''======================1.保存预测信息到txt文件====================='''
 # predn：单张图片的预测框，格式通常是 [x1, y1, x2, y2, conf, cls]
 # save_conf：布尔值，是否在文件里保存置信度 conf。
