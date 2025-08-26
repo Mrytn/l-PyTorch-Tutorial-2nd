@@ -1,17 +1,25 @@
 # YOLOv5 🚀 by Ultralytics, GPL-3.0 license
 
 # Parameters
-nc: 80  # number of classes
-depth_multiple: 0.33  # model depth multiple
-width_multiple: 0.50  # layer channel multiple
+# 参数配置
+nc: 80  # number of classes 所判断目标类别的种类，此处80类
+depth_multiple: 0.33  # model depth multiple 模型层数因子 控制模型的深度（BottleneckCSP个数）
+width_multiple: 0.50  # layer channel multiple 模型通道数因子 控制Conv通道channel个数（卷积核数量）
+# 锚框
 anchors:
-  - [10,13, 16,30, 33,23]  # P3/8
-  - [30,61, 62,45, 59,119]  # P4/16
-  - [116,90, 156,198, 373,326]  # P5/32
+  - [10,13, 16,30, 33,23]  # P3/8 p3层下采样8倍检测小目标例如输入 640 → 特征图 80×80）
+  - [30,61, 62,45, 59,119]  # P4/16 p4层下采样16倍检测中目标（640 → 40×40）
+  - [116,90, 156,198, 373,326]  # P5/32 p5层下采样32倍检测大目标640 → 20×20
 
 # YOLOv5 v6.0 backbone
+# 网络主体
 backbone:
   # [from, number, module, args]
+  # from ：   表示当前模块的输入来自那一层的输出，-1表示将上一层的输出当做自己的输入（第0层的-1表示输入的图像）。
+# number：  表示当前模块的重复次数，实际的重复次数还要由上面的参数depth_multiple共同决定，决定网络模型的深度。
+# module：  表示该层模块的名称，这些模块写在common.py中，进行模块化的搭建网络。
+# args：  表示类的初始化参数，用于解析作为 moudle 的传入参数，会在网络搭建过程中根据不同层进行改变，我们后面具体分析。
+# 0-P1/2表示该层为第0层，输出后会变成原图的1/2
   [[-1, 1, Conv, [64, 6, 2, 2]],  # 0-P1/2
    [-1, 1, Conv, [128, 3, 2]],  # 1-P2/4
    [-1, 3, C3, [128]],
@@ -25,6 +33,7 @@ backbone:
   ]
 
 # YOLOv5 v6.0 head
+# head部分
 head:
   [[-1, 1, Conv, [512, 1, 1]],
    [-1, 1, nn.Upsample, [None, 2, 'nearest']],
