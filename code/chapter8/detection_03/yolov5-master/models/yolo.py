@@ -190,13 +190,36 @@ class Detect(nn.Module):
         return x if self.training else (torch.cat(z, 1),) if self.export else (torch.cat(z, 1), x)
 
     '''===================3.相对坐标转换到grid绝对坐标系============================'''
+    # nx=20, ny=20：当前特征图的宽、高（例如 20x20 网格）。
+# i=0：当前第几个检测层（P3、P4、P5 中的一个）。
+# torch_1_10：兼容不同版本的 PyTorch。检测当前 PyTorch 的版本是否大于等于 1.10.0
     def _make_grid(self, nx=20, ny=20, i=0, torch_1_10=check_version(torch.__version__, '1.10.0')):
+        # 确保生成的 tensor 和 anchors 的设备 (CPU/GPU) 以及数据类型一致。
         d = self.anchors[i].device
         t = self.anchors[i].dtype
+        # 1 → batch 维度（这里先占位）
+# na → 每个网格点有多少个 anchor
+# ny, nx → 特征图的大小
+# 2 → (x, y) 两个坐标
         shape = 1, self.na, ny, nx, 2  # grid shape
+        # torch.arange(ny) → [0, 1, 2, ..., ny-1]
+# torch.arange(nx) → [0, 1, 2, ..., nx-1]
         y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
+# yv 是纵向坐标 (y),每行相同
+# xv 是横向坐标 (x),每列相同
         yv, xv = torch.meshgrid(y, x, indexing='ij') if torch_1_10 else torch.meshgrid(y, x)  # torch>=0.7 compatibility
+        # torch.stack((xv, yv), 2) → 在最后一个维度拼接成 (x, y) 坐标对，属于追加第三个维度
+        # .expand(shape) → 扩展成 (1, na, ny, nx, 2) 形状，每个网格点都要匹配 na 个 anchor。
+# -0.5 → 做一个小的偏移，让预测更居中。
+# grid 的作用：告诉模型每个预测是在特征图的哪个网格点上。
         grid = torch.stack((xv, yv), 2).expand(shape) - 0.5  # add grid offset, i.e. y = 2.0 * x - 0.5
+        #self.anchors[i] → 该检测层的 anchors 尺寸 (相对大小)。
+# self.stride[i] → 该检测层相对于输入图片的缩放步长（比如 P3 的 stride=8，P4=16，P5=32）。
+# .view((1, self.na, 1, 1, 2)) → 调整形状，方便后续和 grid 对齐。
+# .expand(shape) → 让每个 (x, y) 网格点都对应这几个 anchors。
+# ✅ anchor_grid 的作用：表示每个网格点的 anchor 框的真实像素大小。
+# .expand(shape)对应每个网格点，都有一份 anchor (w, h)
+# 注意 expand 不复制数据，只是让每个位置共享同一个 anchor 尺寸
         anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
         return grid, anchor_grid
 
@@ -224,39 +247,88 @@ class BaseModel(nn.Module):
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
+        # y 用来保存中间层的输出（只有需要保存的才存，不是每一层都保存）。
+# dt 用来存储 profiling（层耗时信息），只有在 profile=True 时才用。
         y, dt = [], []  # outputs
+        # self.model 是一个 nn.ModuleList，按顺序存放 YOLO 网络的各个子模块（卷积层、C3、Detect 层等）。
+# 循环逐层执行
         for m in self.model:
             if m.f != -1:  # if not from previous layer
+                # m.f 如果是 int（比如 6），就表示“取第 6 层的输出”。
+# x = y[m.f] 就能得到该层的特征图。
+# 如果 j == -1，就取当前的 x（也就是上一层的输出）。
+# 如果 j != -1，就取 y[j]（第 j 层的输出）。
+# 最终得到一个 list，作为本层的输入，通常后面会拼接（比如 C3 模块里的 Concat）
+# 如：from: [6, 9, 10, -1]，表示输入来自第 6、9、10 层以及上一层。
+# x = [y[6], y[9], y[10], x]
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
+                # 如果 profile=True，就调用 _profile_one_layer 统计该层的 计算耗时、FLOPs 等信息，存到 dt
                 self._profile_one_layer(m, x, dt)
+            # 将输入 x 送入当前层 m，得到该层输出
             x = m(x)  # run
+            # self.save 是个列表，记录哪些层的输出需要保存（因为后续网络还会用到）。
+# 如果该层 m.i（层索引号）在 self.save 里，就把输出 x 存到 y，否则存 None（节省内存）
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
+                # 如果 visualize=True，调用 feature_visualization 保存该层特征图，用于可视化
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
+        # 返回最后一层的输出（一般是 Detect 层的预测结果）
         return x
 
+# 统计模型单层计算开销（FLOPs、推理时间、参数量） 的工具函数，通常用于调试或性能分析，不影响模型推理
     def _profile_one_layer(self, m, x, dt):
+        # 判断当前层 m 是否是 最后一层（通常是 Detect）
+# 如果是最后一层，可能需要复制输入（x.copy()），避免 inplace 操作影响统计结果。
         c = m == self.model[-1]  # is final layer, copy input as inplace fix
+        # 使用 thop 库统计 FLOPs（浮点运算次数）
+# inputs=(x.copy() if c else x,)：最后一层使用拷贝输入
+# [0] 取 FLOPs 数值（thop.profile 返回 (FLOPs, params)）
+# /1E9 转为 GFLOPs
+# * 2 是因为 YOLO 计算时前向+反向统计
+# 如果没有安装 thop，就返回 0
         o = thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPs
+        # 测前向推理时间
+# 循环 10 次，确保测量稳定
+# time_sync() 是同步 GPU/CPU 时间的函数
+# dt.append(...) 存储耗时，单位为毫秒（乘以 100，这里是为了放大便于展示）
         t = time_sync()
         for _ in range(10):
             m(x.copy() if c else x)
         dt.append((time_sync() - t) * 100)
+        # 如果是第一层，打印表头
         if m == self.model[0]:
             LOGGER.info(f"{'time (ms)':>10s} {'GFLOPs':>10s} {'params':>10s}  module")
+        # 打印当前层的统计信息：
+# dt[-1] → 推理耗时（ms）
+# o → FLOPs（GFLOPs）
+# m.np → 参数数量
+# m.type → 模块类型（Conv, C3, Detect 等）
         LOGGER.info(f'{dt[-1]:10.2f} {o:10.2f} {m.np:10.0f}  {m.type}')
         if c:
+            # 如果是最后一层，打印 总耗时
             LOGGER.info(f"{sum(dt):10.2f} {'-':>10s} {'-':>10s}  Total")
 
+    '''将Conv2d+BN进行融合'''
     def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
         LOGGER.info('Fusing layers... ')
         for m in self.model.modules():
+            # 遍历模型的每个模块 m：
+# 只对卷积模块 Conv 或深度可分卷积 DWConv 处理。
+# 必须有 bn 属性（即有 BatchNorm 层
             if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):
+                # 调用 fuse_conv_and_bn 函数，将卷积权重和 BN 参数融合，生成新的卷积层。
+                # 可以变换为等效的卷积权重和 bias，直接用在卷积输出上。
                 m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
+                # 融合后 BN 已不需要，删除 bn 属性，减少推理开销。
                 delattr(m, 'bn')  # remove batchnorm
+                # 替换卷积模块的 forward 方法：
+# 原来的 forward 会执行 conv -> bn -> act
+# 融合后只执行 conv -> act（不再调用 BN）
                 m.forward = m.forward_fuse  # update forward
+        # 打印模型信息，方便确认 Conv+BN 已经融合。
         self.info()
+        # 返回已经融合后的模型对象，可以继续推理或保存
         return self
 
     def info(self, verbose=False, img_size=640):  # print model information
@@ -273,76 +345,169 @@ class BaseModel(nn.Module):
                 m.anchor_grid = list(map(fn, m.anchor_grid))
         return self
 
-
+# Model类是整个模型的构造模块部分。 通过自定义YOLO模型类 ，继承torch.nn.Module。主要作用是指定模型的yaml文件以及一系列的训练参数。
 class DetectionModel(BaseModel):
+    '''===================1.__init__函数==========================='''
     # YOLOv5 detection model
     def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):  # model, input channels, number of classes
         super().__init__()
+        # 如果 cfg 已经是字典
         if isinstance(cfg, dict):
+            # 直接赋值给 self.yaml，后续用这个字典构建模型结构。
             self.yaml = cfg  # model dict
         else:  # is *.yaml
+            # 如果 cfg 是 *.yaml 文件
             import yaml  # for torch hub
+            # cfg 是 yaml 文件路径，比如 "yolov5s.yaml"。
+# self.yaml_file 保存文件名，用于日志或调试。
             self.yaml_file = Path(cfg).name
+            # yaml.safe_load(f)：把 yaml 文件解析成 Python 字典。
+# self.yaml 就得到和直接传入字典一样的结构，可以直接用于 parse_model 构建网络
             with open(cfg, encoding='ascii', errors='ignore') as f:
                 self.yaml = yaml.safe_load(f)  # model dict
 
         # Define model
+        # 如果 yaml 中定义了 ch（输入通道列表），就用它。
+# 否则用函数参数 ch（通常是 [3]，RGB 输入）
         ch = self.yaml['ch'] = self.yaml.get('ch', ch)  # input channels
+# nc 是函数传入的类别数参数。
+# 如果传入的 nc 不为空并且与 yaml 中不同，则覆盖 yaml 的值。
+# 方便用户在初始化模型时动态改变类别数
         if nc and nc != self.yaml['nc']:
             LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
             self.yaml['nc'] = nc  # override yaml value
         if anchors:
+            # 同样，允许传入自定义 anchors。
+# 使用 round(anchors) 进行四舍五入，确保 anchor 是整数。
+# 打印日志提醒用户覆盖了原有 yaml 的 anchors。
             LOGGER.info(f'Overriding model.yaml anchors with anchors={anchors}')
             self.yaml['anchors'] = round(anchors)  # override yaml value
+        # 解析模型，self.model是解析后的模型 self.save是每一层与之相连的层
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
+        # 用数字字符串 [0, 1, 2, ..., nc-1] 作为类别名称。
+# 如果用户没有提供 names，就使用默认
         self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
+        # 如果 yaml 中有 "inplace" 字段，就使用它的值（True 或 False）。
+# 如果没有，就默认返回 True
         self.inplace = self.yaml.get('inplace', True)
 
         # Build strides, anchors
+        # self.model[-1]：YOLOv5 模型的最后一层，一般是 Detect 或 Segment 层。
+# 只有最后一层才需要处理 stride 和 anchors。
         m = self.model[-1]  # Detect()
         if isinstance(m, (Detect, Segment)):
+            # s = 256：一个初始化大小，用于推一次 dummy input，计算 stride。
             s = 256  # 2x min stride
             m.inplace = self.inplace
+            # 对 Segment 层，forward(x) 会返回 (boxes+mask, feature_maps)，取 [0] 只要预测。
+# 对 Detect 层，直接返回 forward(x)。
             forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
+            # forward 通过 backbone+neck+head，得到每个尺度特征图 x[i]。
+# s / x.shape[-2] → 每个检测层的 stride（通常是 [8,16,32] 对应 P3,P4,P5）。
+# 输入尺寸/输出特征图尺寸 = stride
             m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
+            # 确保 anchors 与 stride 的顺序一致（小 anchor 对应小 stride，即高分辨率特征图）。
+# 避免预测框和 anchor 对不上。
             check_anchor_order(m)
+            # 把 anchor 从原图尺度归一化到 特征图尺度：
+# anchor 在原图上是像素尺寸
+# 除以 stride 后，得到每个特征图格子对应的 anchor 尺寸
+# 这样后续预测公式 (wh * anchor_grid) 就正确
             m.anchors /= m.stride.view(-1, 1, 1)
+            # 将 stride 保存到模型对象里，方便后续 NMS 和 decode 使用
             self.stride = m.stride
+            # 对 Detect 层卷积输出的偏置进行初始化：
+# 分类偏置通常初始化为低概率（比如 0.01），加快训练收敛。
+# 置信度偏置也会初始化为小值，减少早期假阳性。
             self._initialize_biases()  # only run once
 
         # Init weights, biases
+        # 初始化权重保证模型参数在训练前处于合适范围。
         initialize_weights(self)
+        # 打印模型信息
+        # 输出通常包括：
+# 层类型和顺序
+# 每层输入/输出通道
+# 参数数量（weights）
+# 模型总参数量和可训练参数量
         self.info()
+        # 仅仅是打印一个空行，美化日志输出。
         LOGGER.info('')
 
+    # x：输入张量 (batch, channels, height, width)
+# augment：是否使用数据增强推理（TTA, Test Time Augmentation）
+# profile：是否对每层做耗时统计
+# visualize：是否可视化中间特征图
     def forward(self, x, augment=False, profile=False, visualize=False):
+        # 是否使用增强推理
         if augment:
+            # _forward_augment 用于 增强推理，通常会：
+# 对输入图像做水平翻转、尺度缩放等多种变换
+# 分别 forward，每个输出解码到原图坐标
+# 最后把多个预测结果融合（如 NMS）
             return self._forward_augment(x)  # augmented inference, None
+        # 执行 标准一次性 forward
+        # 依次通过 backbone → neck → head → Detect
+# 解码预测框 (boxes + scores)
+# 根据 profile 输出耗时
+# 根据 visualize 可选择输出中间 feature map
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
+    # 通过对输入图像做多尺度、多翻转预测，再融合结果提高检测精度
     def _forward_augment(self, x):
+        # 获取输入尺寸
         img_size = x.shape[-2:]  # height, width
+        # s：缩放比例
+# 1 → 原图
+# 0.83 → 缩小 17%
+# 0.67 → 缩小 33%
         s = [1, 0.83, 0.67]  # scales
+        # f：翻转方式
+# None → 不翻转
+# 3 → 左右翻转
+# 2 → 上下翻转（这里没用到）
         f = [None, 3, None]  # flips (2-ud, 3-lr)
+        # 存放预测结果
         y = []  # outputs
+        # 遍历每种增强方式
         for si, fi in zip(s, f):
+            # 训练/推理时 → 一般用最小 stride（保证多尺度特征对齐）
+# 增强推理 _forward_augment 时 → 这里用了最大 stride，确保缩放后图像尺寸至少能整除最粗糙的特征层
+# fi = 3 → 左右翻转
+# fi = None → 不翻转
+# 对输入图片按比例 si 缩放
+# scale_img gs 是最小 stride，保证特征图尺寸能被 stride 整除
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
+            # 一次 forward得到预测结果
             yi = self._forward_once(xi)[0]  # forward
             # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
+            # 将预测框从增强后的图像坐标映射回原图坐标
             yi = self._descale_pred(yi, fi, si, img_size)
+            # 加入列表
             y.append(yi)
+        # 裁剪增强结果
+        # 对每个增强预测结果裁剪到图像有效范围
+# 避免出现坐标超出图像的情况
         y = self._clip_augmented(y)  # clip augmented tails
+        # 这里 dim=1，即 在第 1 个维度（num_predictions）上拼接不同增强方式的结果
         return torch.cat(y, 1), None  # augmented inference, train
 
+    # 将推理结果恢复到原图尺寸
     def _descale_pred(self, p, flips, scale, img_size):
         # de-scale predictions following augmented inference (inverse operation)
         if self.inplace:
+            # 对 box 的前四个值（中心点坐标和宽高）按缩放系数 除回去。
+# 因为预测时输入图像被缩放过，所以这里需要恢复到原始大小。
             p[..., :4] /= scale  # de-scale
+            # 注意这里 img_size[0] 是输入图像的高度，img_size[1] 是输入图像的宽度。
+            # 上下翻转恢复
             if flips == 2:
                 p[..., 1] = img_size[0] - p[..., 1]  # de-flip ud
+            # 左右翻转恢复
             elif flips == 3:
                 p[..., 0] = img_size[1] - p[..., 0]  # de-flip lr
         else:
+            # 非 inplace 版本是单独拆成 x, y, wh 再 cat 回去。
             x, y, wh = p[..., 0:1] / scale, p[..., 1:2] / scale, p[..., 2:4] / scale  # de-scale
             if flips == 2:
                 y = img_size[0] - y  # de-flip ud
@@ -351,25 +516,75 @@ class DetectionModel(BaseModel):
             p = torch.cat((x, y, wh, p[..., 4:]), -1)
         return p
 
+    # TTA的时候对原图片进行裁剪
+    # YOLOv5 在 测试增强推理（TTA） 后，对预测结果做的 裁剪操作，目的是去掉增强推理过程中某些多余或边缘的预测框
     def _clip_augmented(self, y):
         # Clip YOLOv5 augmented inference tails
+        # nl 表示检测头的层数，一般是 3（P3, P4, P5）
         nl = self.model[-1].nl  # number of detection layers (P3-P5)
+        # 每往上一个层级，网格点数量大约 缩小 4 倍（因为宽高各减半 → 2×2=4）
+# 所以使用 4 ** x 来近似每层相对网格点数量：
+# 注意这里是简化的近似，主要用于权重初始化或模型统计，不是实际精确的格子数。
         g = sum(4 ** x for x in range(nl))  # grid points
         e = 1  # exclude layer count
+        # y[0] 是增强推理后的第一个结果（通常是原图或大尺度缩放的输出）。
+# 计算出要裁掉的 索引数量 i，然后把最后 i 个预测框去掉（:-i）。
+# 作用：去掉边缘重复框或 TTA 带来的尾部冗余预测。
+# y[0] → 增强推理后的第一个输出（通常是原图或大尺度缩放输出）
+# y[0].shape[1] → 预测框总数量
+# (y[0].shape[1] // g) → 每个“网格点比例单位”对应的预测框数量
+# sum(4 ** x for x in range(e)) → 要裁剪的网格点数量
+# i → 计算出要裁掉的预测框数量
+# y[0][:, :-i] → 去掉最后 i 个冗余框
         i = (y[0].shape[1] // g) * sum(4 ** x for x in range(e))  # indices
         y[0] = y[0][:, :-i]  # large
+        # 排除/裁剪层数，通常是 1
+# 表示只裁剪最边缘的一层网格预测
+        # nl-1 → 最后一层索引（小尺度层，通常 P5 → index=2）
+# - x → 用于循环裁剪更多层（如果 e>1）
+# 实际上 nl - 1 - x = 最小尺度层的指数，用于计算该层网格点的比例
         i = (y[-1].shape[1] // g) * sum(4 ** (nl - 1 - x) for x in range(e))  # indices
         y[-1] = y[-1][:, i:]  # small
         return y
 
+    '''初始化偏置biases信息,让网络一开始预测框更合理，加快收敛'''
     def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
+        # 取出模型的最后一层 Detect 层，也就是预测框输出层。
         m = self.model[-1]  # Detect() module
+        # m.m 是 Detect 层的多个输出卷积层（每个尺度一个，比如 P3, P4, P5）。
+# m.stride 是每层的步幅，对应输出格子大小。
+# 循环每个尺度的卷积层做偏置初始化
         for mi, s in zip(m.m, m.stride):  # from
+            # 将卷积层 bias 展开成 (na, no)，
+# na = 每层 anchor 数量
+# no = 每个 anchor 输出数量 = 5 + nc （x,y,w,h,obj + 类别概率）
+# 例如 nc=80, na=3 → (3,85)
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
+            # 640 / s
+# s → 特征图 stride
+# 640 / s → 当前检测头特征图的宽度/高度（假设输入图片 640×640）
+# (640 / s) ** 2 → 当前特征图的总网格数
+# 8 / (640 / s) ** 2
+# 假设 平均每张图片有 8 个目标
+# 除以总网格数 → 得到 每个格子平均目标概率
+# math.log(...)
+# YOLO 使用 logits 输出 obj
+# 因为预测框输出经过 sigmoid → 转换为概率
+# 初始化 bias 时，要把概率转成 logit
+# 这里用 log(8 / grid_count) 近似 logit，初始化 obj bias
             b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
+            # b.data[:, 5:5 + m.nc] → 当前预测框 类别 bias（m.nc = 类别数）
+            # 但在数值计算中，用 0.99999 替代 1，可以 防止数值稳定性问题防止除0
+            # 初始化 类别偏置，提高一开始小概率类被预测的概率。
+# 如果没有提供类别频率 cf：
+# 假设每个类别概率平均 0.6 / nc
+# 如果提供了 cf（每类样本数量）：
+# 根据 类别频率 来初始化偏置，使常见类别偏置高，稀有类别偏置低
             b.data[:, 5:5 + m.nc] += math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())  # cls
+            # 将 bias 再 reshape 成卷积层原来的形状 (na * no,)
+# 设置为可训练参数
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
 
