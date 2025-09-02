@@ -36,8 +36,7 @@ from utils.general import LOGGER, check_version, check_yaml, make_divisible, pri
 # 定义了Annotator类，可以在图像上绘制矩形框和标注信息
 from utils.plots import feature_visualization
 # 定义了一些与PyTorch有关的工具函数
-from utils.torch_utils import (fuse_conv_and_bn, initialize_weights, model_info, profile, scale_img, select_device,
-                               time_sync)
+from utils.torch_utils import (fuse_conv_and_bn, initialize_weights, model_info, profile, scale_img, select_device,time_sync)
 
 try:
     # thop 是一个用于 计算神经网络 FLOPs（浮点运算次数）和参数量 的库
@@ -126,6 +125,7 @@ class Detect(nn.Module):
 # _make_grid 生成新的网格坐标和锚框网格
 # 网络输出 (tx, ty, tw, th, confidence, class_prob)，其中 (tx, ty) 是相对网格点左上角的偏移。
 # 所以必须先生成整张特征图的网格坐标，用它和网络输出做解码，得到真实图像坐标。
+# 特征图具体值 x[i] 没参与 grid 生成，它只提供偏移量，和 grid[i] 结合才能算出预测框。
                     self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
 
                 if isinstance(self, Segment):  # (boxes + masks)
@@ -254,6 +254,8 @@ class BaseModel(nn.Module):
 # 循环逐层执行
         for m in self.model:
             if m.f != -1:  # if not from previous layer
+                # 其中 y 是个列表，保存了所有前面层的输出
+                # x 代表 上一层的输出
                 # m.f 如果是 int（比如 6），就表示“取第 6 层的输出”。
 # x = y[m.f] 就能得到该层的特征图。
 # 如果 j == -1，就取当前的 x（也就是上一层的输出）。
@@ -331,18 +333,33 @@ class BaseModel(nn.Module):
         # 返回已经融合后的模型对象，可以继续推理或保存
         return self
 
+    '''打印模型结构信息'''
     def info(self, verbose=False, img_size=640):  # print model information
+        # 调用torch_utils.py下model_info函数打印模型信息
         model_info(self, verbose, img_size)
 
+    '''将模块转移到 CPU/ GPU上'''
+    # PyTorch 默认会把 参数（Parameters） 和 注册的缓冲（register_buffer） 自动转换，但有些模块里还持有普通张量属性（既不是参数也不是 buffer），这些也需要同步转换，此处就是做这件事
+    # fn 是一个“对张量做转换”的函数（由 PyTorch 在内部传入
     def _apply(self, fn):
         # Apply to(), cpu(), cuda(), half() to model tensors that are not parameters or registered buffers
+        # 该调用会递归将 fn 应用于所有 Parameter 和被 register_buffer 注册的张量（以及子模块的 _apply）。
+# super()._apply(fn) 会返回已经被转换后的模块对象（通常就是 self 本身），因此把结果重新赋回 self 是安全且常见的做法
         self = super()._apply(fn)
+        # 取模型的最后一个子模块（YOLO 的实现里最后一层通常是 Detect 或 Segment）。
+# 目的是对该检测头中自定义持有但未注册为 buffer 的张量做额外转换（例如：stride, grid, anchor_grid）。
         m = self.model[-1]  # Detect()
+        # 这两个模块持有一些运行时缓存（grid, anchor_grid, stride），这些张量不是 nn.Parameter 也不是用 register_buffer 注册的，所以父类 _apply 不会处理它们——因此这里补上。
         if isinstance(m, (Detect, Segment)):
+            # Detect 解码计算里会做 (xy*2 + grid) * stride，如果 stride 保持在 CPU/FP32 而输入特征在 GPU/FP16，会导致设备或 dtype 不匹配错误（例如 expected scalar type Half but found Float 或 device mismatch）。
             m.stride = fn(m.stride)
+            # m.grid 是一个 list（每个尺度一个 tensor，可能最初是 torch.empty(0)，实际会在第一次 forward 时 replace 成实际张量），这里对 m.grid 中每个 tensor 应用 fn，并把结果转成 list 保存
             m.grid = list(map(fn, m.grid))
             if isinstance(m.anchor_grid, list):
+                # anchor_grid 在解码 (wh * 2)^2 * anchor_grid 时会被用到，所以也必须与特征同 device/dtype。
                 m.anchor_grid = list(map(fn, m.anchor_grid))
+        # 返回处理后的模块对象，供调用端继续使用（这与 nn.Module._apply 的行为一致）。
+# 这样链式调用 model.to(...).eval() 等仍然可用。
         return self
 
 # Model类是整个模型的构造模块部分。 通过自定义YOLO模型类 ，继承torch.nn.Module。主要作用是指定模型的yaml文件以及一系列的训练参数。
@@ -401,18 +418,21 @@ class DetectionModel(BaseModel):
             m.inplace = self.inplace
             # 对 Segment 层，forward(x) 会返回 (boxes+mask, feature_maps)，取 [0] 只要预测。
 # 对 Detect 层，直接返回 forward(x)。
+# 这里的 forward 就是一个函数对象。lambda x: ... 定义了一个匿名函数。
             forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
             # forward 通过 backbone+neck+head，得到每个尺度特征图 x[i]。
 # s / x.shape[-2] → 每个检测层的 stride（通常是 [8,16,32] 对应 P3,P4,P5）。
 # 输入尺寸/输出特征图尺寸 = stride
             m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
-            # 确保 anchors 与 stride 的顺序一致（小 anchor 对应小 stride，即高分辨率特征图）。
+            # 确保 anchors 与 stride 的顺序一致（小目标 anchor 对应小 stride，即高分辨率特征图）。
 # 避免预测框和 anchor 对不上。
             check_anchor_order(m)
             # 把 anchor 从原图尺度归一化到 特征图尺度：
 # anchor 在原图上是像素尺寸
 # 除以 stride 后，得到每个特征图格子对应的 anchor 尺寸
 # 这样后续预测公式 (wh * anchor_grid) 就正确
+# view(-1,1,1)
+# 先把 stride 从 (3,) 转成 (3,1,1)，方便和 (3,3,2) 形状的 anchors 广播相除。
             m.anchors /= m.stride.view(-1, 1, 1)
             # 将 stride 保存到模型对象里，方便后续 NMS 和 decode 使用
             self.stride = m.stride
@@ -485,8 +505,7 @@ class DetectionModel(BaseModel):
             yi = self._descale_pred(yi, fi, si, img_size)
             # 加入列表
             y.append(yi)
-        # 裁剪增强结果
-        # 对每个增强预测结果裁剪到图像有效范围
+        # 裁剪增强推理后的预测结果，去掉边缘的“多余预测框”。
 # 避免出现坐标超出图像的情况
         y = self._clip_augmented(y)  # clip augmented tails
         # 这里 dim=1，即 在第 1 个维度（num_predictions）上拼接不同增强方式的结果
@@ -527,6 +546,8 @@ class DetectionModel(BaseModel):
 # 注意这里是简化的近似，主要用于权重初始化或模型统计，不是实际精确的格子数。
         g = sum(4 ** x for x in range(nl))  # grid points
         e = 1  # exclude layer count
+        # y[0] 是增强推理得到的预测框张量，形状 [bs, num_preds, no]。
+# shape[1] 是预测框总数 num_preds。
         # y[0] 是增强推理后的第一个结果（通常是原图或大尺度缩放的输出）。
 # 计算出要裁掉的 索引数量 i，然后把最后 i 个预测框去掉（:-i）。
 # 作用：去掉边缘重复框或 TTA 带来的尾部冗余预测。
@@ -574,6 +595,7 @@ class DetectionModel(BaseModel):
 # 因为预测框输出经过 sigmoid → 转换为概率
 # 初始化 bias 时，要把概率转成 logit
 # 这里用 log(8 / grid_count) 近似 logit，初始化 obj bias
+# 索引 4 对应 objectness（目标存在概率） 的偏置
             b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
             # b.data[:, 5:5 + m.nc] → 当前预测框 类别 bias（m.nc = 类别数）
             # 但在数值计算中，用 0.99999 替代 1，可以 防止数值稳定性问题防止除0
@@ -717,7 +739,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         elif m in {Detect, Segment}:
             # 添加每层输入通道列表 [ch[x] for x in f]
             args.append([ch[x] for x in f])
-            # args[1] 就是 Detect/Segment 模块在构造函数里的第二个参数——锚点信息，所以通常用来表示锚点数量。
+            # args[1] 就是 Detect/Segment 模块在构造函数里的第二个参数——锚点信息，所以通常用来表示锚框数量。
             # 如配置文件中   [[17, 20, 23], 1, Detect, [nc, anchors]],  # Detect(P3, P4, P5)
             if isinstance(args[1], int):  # number of anchors
                 # 如果是整数，比如 3，说明每个输出通道有 3 个 anchor。
@@ -725,7 +747,8 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 # args[1]*2 是因为每个 anchor 有 (x, y) 两个坐标，所以乘 2。
 # list(range(...)) 生成索引列表 [0, 1, 2, 3, 4, 5]。
 # * len(f) 表示为每个输入索引复制一份。
-# 目的是把整数形式的锚点数转换成列表形式，方便 Detect/Segment 模块使用
+# 目的是把整数形式的锚框数转换成列表形式，方便 Detect/Segment 模块使用
+# f 是 从哪些层输出特征图（通常 P3-P5 → 3 层）
                 args[1] = [list(range(args[1] * 2))] * len(f)
             if m is Segment:
                 # 如果模块是 Segment（分割头），对 args[3] 做调整。
@@ -752,7 +775,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         # nn.Sequential(...)把这 n 个模块顺序堆叠，作为一个整体模块。
         m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         # 获取模块类型名称，用于打印日志
-        # str(m) 会返回类似 <class 'models.common.Conv'>，这里去掉前后的 <class '...'>，只保留 Conv
+        # '__main__.C3(64,64,3)'[8:-2] -> 'C3(64,64,3'
         t = str(m)[8:-2].replace('__main__.', '')  # module type
         # 计算该模块的参数总数（weights + bias）。
 # x.numel() 返回每个 tensor 的元素数量，累加得到总参数量。
@@ -805,17 +828,35 @@ if __name__ == '__main__':
     device = select_device(opt.device)
 
     # Create model
+    # 根据配置文件 opt.cfg（YOLO 的 yaml 文件，定义了网络结构）实例化一个 Model。
+# .to(device) 把整个模型搬到 GPU 或 CPU，确保和输入 im 在同一设备上
     im = torch.rand(opt.batch_size, 3, 640, 640).to(device)
     model = Model(opt.cfg).to(device)
 
     # Options
     if opt.line_profile:  # profile layer by layer
+        # 逐层分析性能。
+# 这里调用 model(im, profile=True)，会触发你之前看到的 _forward_once 里对 profile 的处理：
+# 每层通过 thop.profile 计算 FLOPs（运算量）。
+# 计时运行 10 次算平均耗时。
+# 最后打印每一层的耗时、GFLOPs、参数数量。
+# 用于逐层性能诊断（瓶颈在哪一层）。
         model(im, profile=True)
 
     elif opt.profile:  # profile forward-backward
+#         整体正向 + 反向传播 profiling。
+# profile(...) 是 utils 里的一个工具函数，功能类似于 torch.utils.benchmark：
+# 这里对整个 model（op）做 3 次运行，统计平均耗时、显存占用等指标。
+# 和逐层不同，这里是端到端测试，包括 forward + backward。
+# 常用于训练前评估：这个模型在当前硬件上跑一次大概需要多少显存、耗时
         results = profile(input=im, ops=[model], n=3)
 
     elif opt.test:  # test all models
+        # 遍历项目中所有 yolo*.yaml 配置文件（例如 yolov5s.yaml, yolov5m.yaml ...）。
+# 尝试实例化 Model(cfg)。
+# 如果某个配置出错（结构定义错误/不兼容），就捕获异常并打印出来。
+# 作用：快速验证项目里所有模型配置文件能否成功加载，不会影响主流程。
+# .rglob(pattern) 是 递归搜索 方法，会从当前目录开始，查找 所有子目录，匹配文件名模式的文件
         for cfg in Path(ROOT / 'models').rglob('yolo*.yaml'):
             try:
                 _ = Model(cfg)
