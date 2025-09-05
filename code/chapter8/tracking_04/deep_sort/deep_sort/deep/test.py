@@ -47,24 +47,30 @@ net.eval()
 net.to(device)
 
 # compute features
+# 建立空的 Tensor 来存放所有 query / gallery 的特征和标签
 query_features = torch.tensor([]).float()
 query_labels = torch.tensor([]).long()
 gallery_features = torch.tensor([]).float()
 gallery_labels = torch.tensor([]).long()
 
 with torch.no_grad():
+    # 遍历 queryloader，送入模型 net 得到特征。
+# features shape 一般是 (batch_size, feature_dim)。
+# 累加到 query_features 里。
+# 同步保存 labels。
     for idx,(inputs,labels) in enumerate(queryloader):
         inputs = inputs.to(device)
         features = net(inputs).cpu()
         query_features = torch.cat((query_features, features), dim=0)
         query_labels = torch.cat((query_labels, labels))
-
+    # 提取 Gallery 特征
     for idx,(inputs,labels) in enumerate(galleryloader):
         inputs = inputs.to(device)
         features = net(inputs).cpu()
         gallery_features = torch.cat((gallery_features, features), dim=0)
         gallery_labels = torch.cat((gallery_labels, labels))
-
+# 所有 gallery 标签统一减去 2。
+# 👉 这说明你的 dataset label 编码里，gallery 的 ID 起始值比 query 高 2，这里是做 对齐处理。
 gallery_labels -= 2
 
 # save features
@@ -74,4 +80,6 @@ features = {
     "gf": gallery_features,
     "gl": gallery_labels
 }
+# 把 query 和 gallery 的特征与标签打包成字典。
+# 保存成 features.pth，方便后续检索 / 评估使用。
 torch.save(features,"features.pth")

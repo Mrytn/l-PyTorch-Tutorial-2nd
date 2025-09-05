@@ -95,7 +95,7 @@ def train(epoch):
         correct += outputs.max(dim=1)[1].eq(labels).sum().item()
         total += labels.size(0)
 
-        # print 
+        # print
         if (idx+1)%interval == 0:
             end = time.time()
             print("[progress:{:.1f}%]time:{:.2f}s Loss:{:.5f} Correct:{}/{} Acc:{:.3f}%".format(
@@ -103,7 +103,7 @@ def train(epoch):
             ))
             training_loss = 0.
             start = time.time()
-    
+
     return train_loss/len(trainloader), 1.- correct/total
 
 def test(epoch):
@@ -122,7 +122,7 @@ def test(epoch):
             test_loss += loss.item()
             correct += outputs.max(dim=1)[1].eq(labels).sum().item()
             total += labels.size(0)
-        
+
         print("Testing ...")
         end = time.time()
         print("[progress:{:.1f}%]time:{:.2f}s Loss:{:.5f} Correct:{}/{} Acc:{:.3f}%".format(
@@ -145,12 +145,20 @@ def test(epoch):
 
     return test_loss/len(testloader), 1.- correct/total
 
+'''训练过程曲线绘制函数，每次调用 draw_curve(...) 就会更新 loss / error 的曲线，并保存成 train.jpg'''
 # plot figure
+# 用字典存储每个 epoch 的训练/验证 loss 和 error。
+# x_epoch 存储横坐标（epoch 数）
 x_epoch = []
 record = {'train_loss':[], 'train_err':[], 'test_loss':[], 'test_err':[]}
 fig = plt.figure()
 ax0 = fig.add_subplot(121, title="loss")
 ax1 = fig.add_subplot(122, title="top1err")
+# 每次调用都会：
+# 更新数据
+# 在两个子图上画出 训练/验证 loss & error 曲线
+# 'bo-' = 蓝色、圆点、连线 → train
+# 'ro-' = 红色、圆点、连线 → val
 def draw_curve(epoch, train_loss, train_err, test_loss, test_err):
     global record
     record['train_loss'].append(train_loss)
@@ -163,13 +171,16 @@ def draw_curve(epoch, train_loss, train_err, test_loss, test_err):
     ax0.plot(x_epoch, record['test_loss'], 'ro-', label='val')
     ax1.plot(x_epoch, record['train_err'], 'bo-', label='train')
     ax1.plot(x_epoch, record['test_err'], 'ro-', label='val')
+    # 只在第一次加图例
     if epoch == 0:
         ax0.legend()
         ax1.legend()
+    # 保存图片
     fig.savefig("train.jpg")
 
 # lr decay
 def lr_decay():
+    # 声明当前函数里用到的变量是全局变量，而不是函数的局部变量
     global optimizer
     for params in optimizer.param_groups:
         params['lr'] *= 0.1

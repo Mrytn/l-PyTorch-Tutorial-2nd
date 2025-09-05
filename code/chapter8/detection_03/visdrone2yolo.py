@@ -13,6 +13,9 @@ from PIL import Image
 from tqdm import tqdm
 
 
+    # VisDrone → YOLO 格式转换器。
+    # VisDrone 的框是 以左上角为起点 的矩形框
+    # x, y → 左上角坐标 (top-left corner)
 def visdrone2yolo(dir):
     def convert_box(size, box):
         # Convert VisDrone box to YOLO xywh box
@@ -26,12 +29,17 @@ def visdrone2yolo(dir):
         img_size = Image.open((dir / 'images' / f.name).with_suffix('.jpg')).size
         lines = []
         with open(f, 'r') as file:  # read annotation.txt
+            # x, y, w, h, score, class, truncation, occlusion
+            # .splitlines()按行拆分成一个 list
             for row in [x.split(',') for x in file.read().strip().splitlines()]:
                 if row[4] == '0':  # VisDrone 'ignored regions' class 0
                     continue
+                # YOLO 的要求（YOLO 类别编号从 0 开始
                 cls = int(row[5]) - 1
                 box = convert_box(img_size, tuple(map(int, row[:4])))
                 lines.append(f"{cls} {' '.join(f'{x:.6f}' for x in box)}\n")
+                # 把路径中的 annotations 替换成 labels，保证标签文件存储在新建的 labels 目录里
+# 写入所有的转换结果 lines
                 txt_path = str(f).replace(os.sep + 'annotations' + os.sep, os.sep + 'labels' + os.sep)
                 with open(txt_path, 'w') as fl:
                     fl.writelines(lines)  # write label.txt
