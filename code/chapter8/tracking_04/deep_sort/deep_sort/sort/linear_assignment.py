@@ -169,7 +169,7 @@ def matching_cascade(
 # unmatched_detections: 没有匹配上的检测（可能是新目标）
     return matches, unmatched_tracks, unmatched_detections
 
-
+# 用卡尔曼滤波器的预测分布把不合理的检测-轨迹配对从代价矩阵中“屏蔽”掉，避免分配器把明显不匹配的对也匹配上
 def gate_cost_matrix(
         kf, cost_matrix, tracks, detections, track_indices, detection_indices,
         gated_cost=INFTY_COST, only_position=False):
@@ -207,13 +207,23 @@ def gate_cost_matrix(
         Returns the modified cost matrix.
 
     """
+    # 如果 only_position=True，只用位置 (x,y) 进行门控（gating），否则用完整的测量向量 (x, y, a, h)（中心 x、中心 y、长宽比 a、高度 h）。
+# gating_dim 用来选择 χ² 分布的自由度（degree of freedom）
     gating_dim = 2 if only_position else 4
+    # kalman_filter.chi2inv95 是预计算的 χ² 分位数（0.95）表，按自由度索引。例如常用近似值：
+# df=2 → ~5.991， df=4 → ~9.488。
+# 这个阈值表示：如果测量与预测的**（平方）马氏距离超过该阈值，则认为该测量在 95% 置信度下不太可能**来自该轨迹（即“不可关联”）。
     gating_threshold = kalman_filter.chi2inv95[gating_dim]
+    # 把所有候选检测（对应 detection_indices）转换成测量向量并堆成一个 (M, 4) 的数组（若 only_position=True，后续计算会只取前两维）。
+# to_xyah() 通常返回 [center_x, center_y, aspect_ratio, height]。
     measurements = np.asarray(
         [detections[i].to_xyah() for i in detection_indices])
+    # 对每个要检查的轨迹（映射到 cost_matrix 的行）迭代，row 是 cost_matrix 的行号，track_idx 是在 tracks 列表中的索引
     for row, track_idx in enumerate(track_indices):
         track = tracks[track_idx]
+        #调用卡尔曼滤波器的方法来计算该轨迹与所有 measurements 的门控距离（马氏距离）。返回通常是形状为 (M,) 的一维数组，每个元素是该测量到该轨迹预测的平方马氏距离（用创新向量和创新协方差计算）。
         gating_distance = kf.gating_distance(
             track.mean, track.covariance, measurements, only_position)
+        # 对于该轨迹，找到所有大于阈值的测量（布尔掩码 gating_distance > gating_threshold），在 cost_matrix 的对应列上把这些不可行的关联费用设为 gated_cost（默认是很大的常数 INFTY_COST）。
         cost_matrix[row, gating_distance > gating_threshold] = gated_cost
     return cost_matrix
