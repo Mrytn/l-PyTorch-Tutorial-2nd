@@ -4,16 +4,30 @@ import numpy as np
 
 from deep_sort.utils.parser import get_config
 from deep_sort.deep_sort import DeepSort
+'''DeepSORT 多目标跟踪集成 YOLOv5 检测结果 的实现，核心作用是：
+接收 YOLOv5 输出的检测框
+用 DeepSORT 分配唯一 ID 跟踪每个目标
+绘制检测框、ID、碰撞检查点'''
 
+# DeepSORT 初始化
 cfg = get_config()
 cfg.merge_from_file("./deep_sort/configs/deep_sort.yaml")
+# REID_CKPT：特征提取模型（ReID）路径
+# max_dist：特征匹配距离阈值
+# min_confidence：最小置信度过滤
+# max_age：多少帧内没匹配上还保留轨迹
+# nn_budget：最大特征数缓存
 deepsort = DeepSort(cfg.DEEPSORT.REID_CKPT,
                     max_dist=cfg.DEEPSORT.MAX_DIST, min_confidence=cfg.DEEPSORT.MIN_CONFIDENCE,
                     nms_max_overlap=cfg.DEEPSORT.NMS_MAX_OVERLAP, max_iou_distance=cfg.DEEPSORT.MAX_IOU_DISTANCE,
                     max_age=cfg.DEEPSORT.MAX_AGE, n_init=cfg.DEEPSORT.N_INIT, nn_budget=cfg.DEEPSORT.NN_BUDGET,
                     use_cuda=True)
 
-
+'''bboxes 每个元素 (x1, y1, x2, y2, 类别, track_id)
+在框上显示类别和 ID
+绘制一个 碰撞检测点（框顶部 60% 高度）并用红色标记
+支持自动计算线条粗细'''
+# 绘制检测框函数
 def draw_bboxes(image, bboxes, line_thickness):
     line_thickness = line_thickness or round(
         0.001 * (image.shape[0] + image.shape[1]) * 0.5) + 1
@@ -51,7 +65,10 @@ def draw_bboxes(image, bboxes, line_thickness):
 
     return image
 
-
+'''更新跟踪
+DeepSORT 需要 中心点 + 宽高 形式的 bbox
+outputs 返回 (x1, y1, x2, y2, track_id)
+然后用 search_label 将 DeepSORT 输出的每个跟踪框 匹配回 YOLOv5 的类别'''
 def update(bboxes, image):
     bbox_xywh = []
     confs = []
@@ -85,7 +102,9 @@ def update(bboxes, image):
 
     return bboxes2draw
 
-
+'''搜索类别函数
+用 中心点距离 将跟踪 ID 对应到 YOLOv5 的检测类别
+设置阈值 max_dist_threshold 避免匹配错误'''
 def search_label(center_x, center_y, bboxes_xyxy, max_dist_threshold):
     """
     在 yolov5 的 bbox 中搜索中心点最接近的label

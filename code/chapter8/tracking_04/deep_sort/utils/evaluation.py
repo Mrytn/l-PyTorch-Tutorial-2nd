@@ -15,33 +15,36 @@ class Evaluator(object):
 
         self.load_annotations()
         self.reset_accumulator()
-
+    # 加载标注
     def load_annotations(self):
         assert self.data_type == 'mot'
 
         gt_filename = os.path.join(self.data_root, self.seq_name, 'gt', 'gt.txt')
         self.gt_frame_dict = read_results(gt_filename, self.data_type, is_gt=True)
         self.gt_ignore_frame_dict = read_results(gt_filename, self.data_type, is_ignore=True)
-
+    # 重置累加器
     def reset_accumulator(self):
         self.acc = mm.MOTAccumulator(auto_id=True)
-
+    # 单帧评估
     def eval_frame(self, frame_id, trk_tlwhs, trk_ids, rtn_events=False):
         # results
         trk_tlwhs = np.copy(trk_tlwhs)
         trk_ids = np.copy(trk_ids)
 
         # gts
+        # 获取 GT
         gt_objs = self.gt_frame_dict.get(frame_id, [])
         gt_tlwhs, gt_ids = unzip_objs(gt_objs)[:2]
 
         # ignore boxes
+        # 处理 ignore 区域
         ignore_objs = self.gt_ignore_frame_dict.get(frame_id, [])
         ignore_tlwhs = unzip_objs(ignore_objs)[0]
 
 
         # remove ignored results
         keep = np.ones(len(trk_tlwhs), dtype=bool)
+        # 移除预测框中与 ignore 区域重叠的
         iou_distance = mm.distances.iou_matrix(ignore_tlwhs, trk_tlwhs, max_iou=0.5)
         if len(iou_distance) > 0:
             match_is, match_js = mm.lap.linear_sum_assignment(iou_distance)
@@ -55,9 +58,11 @@ class Evaluator(object):
             trk_ids = trk_ids[keep]
 
         # get distance matrix
+        # 计算预测与 GT 的 IoU 矩阵
         iou_distance = mm.distances.iou_matrix(gt_tlwhs, trk_tlwhs, max_iou=0.5)
 
         # acc
+        # 更新累加器
         self.acc.update(gt_ids, trk_ids, iou_distance)
 
         if rtn_events and iou_distance.size > 0 and hasattr(self.acc, 'last_mot_events'):
@@ -65,7 +70,7 @@ class Evaluator(object):
         else:
             events = None
         return events
-
+    # 文件评估
     def eval_file(self, filename):
         self.reset_accumulator()
 

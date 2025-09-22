@@ -6,7 +6,7 @@ import typing
 from urllib.parse import urlparse
 
 import torch
-
+'''让本地 Python/Torch 可以像调用本地模型一样调用远程 Triton 模型'''
 
 class TritonRemoteModel:
     """ A wrapper over a model served by the Triton Inference Server. It can

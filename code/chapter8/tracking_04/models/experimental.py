@@ -10,7 +10,8 @@ import torch.nn as nn
 
 from utils.downloads import attempt_download
 
-
+'''实验性模块（experimental.py），包括一些增强卷积、模型集成和权重加载相关功能'''
+'''对多层特征图进行加权或非加权求和'''
 class Sum(nn.Module):
     # Weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
     def __init__(self, n, weight=False):  # n: number of inputs
@@ -31,7 +32,7 @@ class Sum(nn.Module):
                 y = y + x[i + 1]
         return y
 
-
+'''使用不同卷积核大小的深度可分离卷积组合，提高特征表达能力'''
 class MixConv2d(nn.Module):
     # Mixed Depth-wise Conv https://arxiv.org/abs/1907.09595
     def __init__(self, c1, c2, k=(1, 3), s=1, equal_ch=True):  # ch_in, ch_out, kernel, stride, ch_strategy
@@ -56,7 +57,7 @@ class MixConv2d(nn.Module):
     def forward(self, x):
         return self.act(self.bn(torch.cat([m(x) for m in self.m], 1)))
 
-
+'''把多个模型组合成一个 ensemble'''
 class Ensemble(nn.ModuleList):
     # Ensemble of models
     def __init__(self):
@@ -69,7 +70,7 @@ class Ensemble(nn.ModuleList):
         y = torch.cat(y, 1)  # nms ensemble
         return y, None  # inference, train output
 
-
+'''加载单个或多个 YOLOv5 权重，返回模型或模型 ensemble'''
 def attempt_load(weights, device=None, inplace=True, fuse=True):
     # Loads an ensemble of models weights=[a,b,c] or a single model weights=[a] or weights=a
     from models.yolo import Detect, Model

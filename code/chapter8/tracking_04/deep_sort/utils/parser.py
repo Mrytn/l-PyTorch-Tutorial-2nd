@@ -6,6 +6,8 @@ class YamlParser(edict):
     """
     This is yaml parser based on EasyDict.
     """
+    # 如果提供 YAML 文件，读取内容，并更新到 cfg_dict
+# 调用父类 edict 构造函数，初始化对象
     def __init__(self, cfg_dict=None, config_file=None):
         if cfg_dict is None:
             cfg_dict = {}
@@ -17,16 +19,16 @@ class YamlParser(edict):
 
         super(YamlParser, self).__init__(cfg_dict)
 
-    
+    # 从文件更新配置
     def merge_from_file(self, config_file):
         with open(config_file, 'r') as fo:
             self.update(yaml.load(fo.read(), Loader=yaml.SafeLoader))
 
-    
+    # 从字典更新配置
     def merge_from_dict(self, config_dict):
         self.update(config_dict)
 
-
+# 工厂函数方便快速创建 YamlParser 对象
 def get_config(config_file=None):
     return YamlParser(config_file=config_file)
 

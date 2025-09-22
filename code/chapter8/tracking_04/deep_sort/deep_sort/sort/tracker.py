@@ -129,6 +129,10 @@ class Tracker:
 # track.features 是 list，每个元素是检测帧提取的特征向量
             features += track.features
             # 每个特征向量对应轨迹 ID
+            # features 是 N×M 数组，每行一个特征向量
+# targets 是长度 N 的列表，每个元素是该行特征向量对应的轨迹 ID
+# 保证 特征和轨迹 ID 一一对应
+# 重复多次id
             targets += [track.track_id for _ in track.features]
             # 清空轨迹特征缓存，避免重复加入下一帧
             track.features = []
@@ -140,11 +144,21 @@ class Tracker:
         self.metric.partial_fit(np.asarray(features), np.asarray(targets), active_targets)  # 重要！记录所有目标的所有特征向量
 
     def _match(self, detections):
-
+        # 计算 目标检测框与已有轨迹之间的代价矩阵，并结合卡尔曼滤波的门控（gating）机制，剔除不可能的匹配
         def gated_metric(tracks, dets, track_indices, detection_indices):
+            # 从 dets（检测框列表）中，提取指定索引 detection_indices 的检测特征（ReID embedding 向量）。
+# 结果是一个二维矩阵，例如 (num_detections, feature_dim)。
             features = np.array([dets[i].feature for i in detection_indices])
+            # 从 tracks（轨迹列表）中，提取指定索引 track_indices 的 track_id。
+# 注意：这里不是提取轨迹的特征向量，而是轨迹的 ID。
             targets = np.array([tracks[i].track_id for i in track_indices])
+            # 外观距离矩阵
+            # 每个元素表示某个轨迹与某个检测框之间的外观相似度（数值越小越相似
             cost_matrix = self.metric.distance(features, targets)
+            # 卡尔曼滤波器 gating 对代价矩阵进行约束
+            # 先根据卡尔曼滤波预测的轨迹状态（位置、速度），计算当前检测框是否在**门控范围（gating threshold）**内。
+# 如果某个检测框太远（不可能是该轨迹），则在 cost_matrix 中对应位置赋予一个很大的值（例如 ∞）。
+# 保证只在合理的空间范围内匹配检测和轨迹。
             cost_matrix = linear_assignment.gate_cost_matrix(
                 self.kf, cost_matrix, tracks, dets, track_indices,
                 detection_indices)
@@ -158,29 +172,54 @@ class Tracker:
             i for i, t in enumerate(self.tracks) if not t.is_confirmed()]
 
         # Associate confirmed tracks using appearance features.
+        # 遍历 self.tracks（当前维护的轨迹列表）。
+# 筛选出 已确认（confirmed）的轨迹索引。
         matches_a, unmatched_tracks_a, unmatched_detections = \
             linear_assignment.matching_cascade(
                 gated_metric, self.metric.matching_threshold, self.max_age,
                 self.tracks, detections, confirmed_tracks)
 
         # Associate remaining tracks together with unconfirmed tracks using IOU.
+        # unconfirmed_tracks刚新建、还没确认（未到 n_init 次数）的轨迹，不能直接用外观特征匹配（因为特征太少、不稳定）所以要在第二阶段用 IOU 去匹配
+        # 这里的 unmatched_tracks_a 是第一阶段（外观特征匹配）后没有成功配对的“已确认轨迹”。
+# 但是 只挑出那些“上一帧刚刚更新过”的轨迹（time_since_update == 1）。
+# 为什么？因为这些轨迹的位置预测比较靠谱（只错过 1 帧），所以还值得再尝试用 IOU 匹配。
         iou_track_candidates = unconfirmed_tracks + [
             k for k in unmatched_tracks_a if
             self.tracks[k].time_since_update == 1]
+        # 把那些 time_since_update == 1 的轨迹“移走”，因为它们已经加进 iou_track_candidates 里了。
+# 剩下的 unmatched_tracks_a 就是那些没匹配成功、而且预测可能比较不可靠的轨迹（错过多于 1 帧）
         unmatched_tracks_a = [
             k for k in unmatched_tracks_a if
             self.tracks[k].time_since_update != 1]
+        # 调用 IOU 匹配：
+# iou_cost 会计算轨迹框和检测框的 IOU 距离（1 - IOU）。
+# max_iou_distance 是阈值（超过就不算可匹配）。
+# 在候选轨迹 (iou_track_candidates) 和剩下的检测 (unmatched_detections) 之间做匈牙利算法匹配。
         matches_b, unmatched_tracks_b, unmatched_detections = \
             linear_assignment.min_cost_matching(
                 iou_matching.iou_cost, self.max_iou_distance, self.tracks,
                 detections, iou_track_candidates, unmatched_detections)
-
+        # 合并两次匹配结果
         matches = matches_a + matches_b
+        # unmatched_tracks = 第一阶段没匹配上的（剩下的） + 第二阶段没匹配上的
         unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
+        # matches: 成功匹配的轨迹-检测对
+# unmatched_tracks: 没匹配上的轨迹
+# unmatched_detections: 没匹配上的检测
         return matches, unmatched_tracks, unmatched_detections
-
+    # 建新轨迹（Track）
     def _initiate_track(self, detection):
+        # 卡尔曼滤波器初始化
+        # mean：均值向量，通常是一个 8 维向量（位置 + 速度）
+        # covariance：协方差矩阵 (8×8)，表示不确定性（初始速度部分一般方差较大，因为观测不到）。
         mean, covariance = self.kf.initiate(detection.to_xyah())
+        # 新建一个 Track 实例
+        # mean / covariance：刚算出来的初始状态。
+# self._next_id：轨迹的唯一 ID（自增）。
+# self.n_init：确认需要的连续检测次数（防止假目标）。
+# self.max_age：允许丢失多少帧后删除轨迹。
+# detection.feature：该检测框的外观特征向量（ReID embedding），用于后续外观匹配。
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, self.max_age,
             detection.feature))

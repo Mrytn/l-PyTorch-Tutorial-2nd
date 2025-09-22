@@ -4,7 +4,7 @@ import numpy as np
 
 # from utils.log import get_logger
 
-
+# 将跟踪结果写入文件
 def write_results(filename, results, data_type):
     if data_type == 'mot':
         save_format = '{frame},{id},{x1},{y1},{w},{h},-1,-1,-1,-1\n'
@@ -12,7 +12,7 @@ def write_results(filename, results, data_type):
         save_format = '{frame} {id} pedestrian 0 0 -10 {x1} {y1} {x2} {y2} -10 -10 -10 -1000 -1000 -1000 -10\n'
     else:
         raise ValueError(data_type)
-
+    # 写入文件
     with open(filename, 'w') as f:
         for frame_id, tlwhs, track_ids in results:
             if data_type == 'kitti':
@@ -53,7 +53,7 @@ def write_results(filename, results, data_type):
 #                 f.write(line)
 #     logger.info('Save results to {}'.format(filename))
 
-
+# 把不同格式的跟踪结果或 ground truth 文件解析成统一的内部表示
 def read_results(filename, data_type: str, is_gt=False, is_ignore=False):
     if data_type in ('mot', 'lab'):
         read_fun = read_mot_results
@@ -80,7 +80,7 @@ labels={'ped', ...			% 1
 };
 """
 
-
+# 将 MOT 格式的 GT 或预测结果读取成字典形式，方便跟踪评估使用
 def read_mot_results(filename, is_gt, is_ignore):
     valid_labels = {1}
     ignore_labels = {2, 7, 8, 12}
@@ -122,7 +122,7 @@ def read_mot_results(filename, is_gt, is_ignore):
 
     return results_dict
 
-
+# 一帧或多帧的目标列表解压成 边界框数组、ID 列表和分数列表，以便后续计算和评估使用
 def unzip_objs(objs):
     if len(objs) > 0:
         tlwhs, ids, scores = zip(*objs)
