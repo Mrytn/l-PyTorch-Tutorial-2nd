@@ -31,9 +31,13 @@ class Detector:
         img0 = img.copy()
         # 按 img_size 缩放图像，同时保持纵横比并填充边界。
         img = letterbox(img, new_shape=self.img_size)[0]
+        # ::-1 表示“步长为 -1”，意思是倒序取元素
+        # ::-1 将通道反转 BGR → RGB
         img = img[:, :, ::-1].transpose(2, 0, 1)
+        # 保证图像数据在内存中是连续存储的
         img = np.ascontiguousarray(img)
         img = torch.from_numpy(img).to(self.device)
+        # 转换为 半精度浮点（float16）
         img = img.half()
         img /= 255.0
         if img.ndimension() == 3:
@@ -45,19 +49,23 @@ class Detector:
 
         im0, img = self.preprocess(im)
         # 模型输出预测
+        # 每一行预测包含：
+        # 每个候选框的坐标 + 置信度 + 各类别概率。
         pred = self.m(img, augment=False)[0]
         pred = pred.float()
         # 对预测框进行 NMS，过滤重叠框
         pred = non_max_suppression(pred, self.threshold, 0.4)
 
         boxes = []
+        # 遍历每张图片的检测结果
         for det in pred:
 
             if det is not None and len(det):
                 # 把预测框坐标从缩放图像映射回原始图像尺寸
+                # 因为 NMS 可能返回多个检测框，所以 det 可以有多行，每行是一个框。
                 det[:, :4] = scale_boxes(
                     img.shape[2:], det[:, :4], im0.shape).round()
-
+                # for 会遍历 det 的每一行，所以这里的 *x, conf, cls_id 不是针对整个 det，而是针对每一行的。
                 for *x, conf, cls_id in det:
                     lbl = self.names[int(cls_id)]
                     # if lbl not in ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck']:
